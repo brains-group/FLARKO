@@ -1,0 +1,6 @@
+/data/*.json*
+/models
+__pycache__
+/outputs
+/data/FAR-Trans/
+pyEnv.sh
