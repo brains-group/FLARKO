@@ -77,21 +77,21 @@ def createClients():
     print(biases[:, :, 0])
     print(np.sum(biases[2, 0, :]))
 
-    def handleUser(g, customerID):
+    def handleUser(g: Graph, customerID: str):
         user = URIRef(USER_PREFIX + customerID)
         userTriple = (user, RDF.type, SECURITY.User)
         if userTriple not in g:
             g.add(userTriple)
         return user
 
-    def handleSecurity(g, isin):
+    def handleSecurity(g: Graph, isin: str):
         security = URIRef(ISIN_PREFIX + isin)
         securityTriple = (security, RDF.type, SECURITY.Security)
         if securityTriple not in g:
             g.add(securityTriple)
         return security
 
-    def createTransactionGraph(transactions):
+    def createTransactionGraph(transactions: pd.DataFrame):
         g = Graph()
 
         g.bind("stock", SECURITY)
@@ -136,7 +136,7 @@ def createClients():
             )
         return g
 
-    def getBiasIndexFromBiasValue(customerInformation, columnName):
+    def getBiasIndexFromBiasValue(customerInformation: pd.DataFrame, columnName: str):
         return np.where(
             uniqueCustomerTraits[columnName] == customerInformation[columnName]
         )[0][0]
@@ -279,13 +279,13 @@ def createBackgroundGraph():
                 (priceURI, SCHEMA.datePublished, Literal(timestamp, datatype=XSD.date))
             )
 
-    print(
-        len(
-            backgroundGraph.serialize(
-                format="json-ld", context=backgroundContext, indent=2
-            )
-        )
-    )
+    # print(
+    #     len(
+    #         backgroundGraph.serialize(
+    #             format="json-ld", context=backgroundContext, indent=2
+    #         )
+    #     )
+    # )
 
 
 backgroundGraphPath = "./backgroundGraph.pkl"
@@ -296,3 +296,40 @@ if not os.path.exists(backgroundGraphPath):
 else:
     with open(backgroundGraphPath, "rb") as file:
         backgroundGraph = pickle.load(file)
+
+
+def get_subgraph_until_date(graph: Graph, endDate: str) -> Graph:
+    # 1. Setup the new subgraph
+    subgraph = Graph()
+    subgraph.bind("ex", EX)
+    subgraph.bind("schema", SCHEMA)
+
+    # Parse the end date for comparison
+    end_date = datetime.strptime(endDate, "%Y-%m-%d").date()
+
+    # A set to keep track of securities we've already added to avoid duplication
+    added_securities = set()
+
+    # 2. Find and filter all price observations
+    # We query for the price observation, its date, and the security it belongs to.
+    for price_obs, _, price_date_literal, security_uri in graph.triples_choices(
+        (None, RDF.type, EX.PriceObservation),  # Subject is a PriceObservation
+        (None, SCHEMA.datePublished, None),  # Get its date
+        (None, EX.priceOf, None),  # Get the security it's for
+    ):
+        # Convert the literal date from the graph into a Python date object
+        current_price_date = price_date_literal.toPython()
+
+        # 3. If the date is within the desired range, copy the data
+        if current_price_date <= end_date:
+            # Copy all triples related to this specific price observation
+            for s, p, o in graph.triples((price_obs, None, None)):
+                subgraph.add((s, p, o))
+
+            # If we haven't processed this security yet, copy its descriptive info
+            if security_uri not in added_securities:
+                for s, p, o in graph.triples((security_uri, None, None)):
+                    subgraph.add((s, p, o))
+                added_securities.add(security_uri)
+
+    return subgraph
