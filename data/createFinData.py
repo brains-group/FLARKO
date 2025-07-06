@@ -1,108 +1,298 @@
+import pickle
 import pandas as pd
 import numpy as np
 from rdflib import Graph, Literal, RDF, URIRef, Namespace
-
-# Define your namespaces
-STOCK = Namespace("http://stockTrade.com/ns#")
-SCHEMA = Namespace("http://schema.org/")
+from rdflib.namespace import XSD
+from datetime import datetime
+from tqdm import tqdm
+import os
 
 np.random.seed(2025)
 
-CUSTOMER_BIAS_COLUMNS = ["customerType", "riskLevel", "investmentCapacity"]
+# Define your namespaces
+SECURITY_PREFIX = "http://securityTrade.com/"
+USER_PREFIX = SECURITY_PREFIX + "users/"
+ISIN_PREFIX = "urn:isin:"
+SECURITY = Namespace(SECURITY_PREFIX + "ns#")
+SCHEMA = Namespace("http://schema.org/")
 
-assetInformationDF = pd.read_csv("./FAR-Trans/asset_information.csv", index_col="ISIN")
-closePricesDF = pd.read_csv(
-    "./FAR-Trans/close_prices.csv", index_col=["ISIN", "timestamp"]
-)
-customerInformationDF = pd.read_csv(
-    "./FAR-Trans/customer_information.csv",
-    index_col="customerID",
-    usecols=["customerID"] + CUSTOMER_BIAS_COLUMNS,
-)
-limitPricesDF = pd.read_csv("./FAR-Trans/limit_prices.csv", index_col="ISIN")
-marketsDF = pd.read_csv("./FAR-Trans/markets.csv", index_col="marketID")
-transactionsDF = pd.read_csv("./FAR-Trans/transactions.csv", index_col="transactionID")
+# ------------------------- Transaction Graphs Creation --------------------------
 
-print(transactionsDF.head())
-
-cutomerTransactionsDFGrouped = transactionsDF.groupby("customerID")
-print(cutomerTransactionsDFGrouped.get_group("00017496858921195E5A").head())
-print(len(cutomerTransactionsDFGrouped))
-print(customerInformationDF.shape)
-print(len(transactionsDF["customerID"].unique()))
-
-customerInformationDF = customerInformationDF.loc[
-    ~customerInformationDF.index.duplicated(keep="first")
-]
-customerInformationDF = customerInformationDF.map(lambda x: x.replace("Predicted_", ""))
-print(customerInformationDF.shape)
-print(customerInformationDF.head())
-
-uniqueCustomerTraits = {
-    columnName: customerInformationDF[columnName].unique()
-    for columnName in CUSTOMER_BIAS_COLUMNS
+transactionContext = {
+    "@vocab": str(SECURITY),
+    "schema": str(SCHEMA),
+    "xsd": str(XSD),
+    "transactionValue": {"@type": "xsd:decimal"},
+    # Define the datatype for your date predicate
+    "transactionDate": {"@id": "security:transactionDate", "@type": "xsd:date"},
+    "hasParticipant": {"@type": "@id"},
+    "involvesSecurity": {"@type": "@id"},
 }
 
-clients = [[] for _ in range(20)]
-biases = np.random.random_sample(
-    (
-        len(CUSTOMER_BIAS_COLUMNS),
-        max(len(unique) for unique in uniqueCustomerTraits),
-        len(clients),
+
+def createClients():
+
+    CUSTOMER_BIAS_COLUMNS = ["customerType", "riskLevel", "investmentCapacity"]
+
+    customerInformationDF = pd.read_csv(
+        "./FAR-Trans/customer_information.csv",
+        index_col="customerID",
+        usecols=["customerID"] + CUSTOMER_BIAS_COLUMNS,
     )
-)
-biases = np.apply_along_axis(lambda x: x / np.sum(x), axis=2, arr=biases)
-print(biases[:, :, 0])
-print(np.sum(biases[2, 0, :]))
+    transactionsDF = pd.read_csv(
+        "./FAR-Trans/transactions.csv", index_col="transactionID"
+    )
 
-def handleUser():
-    pass
+    print(transactionsDF.head())
 
-def createTransactionGraph(transactions):
-    g = Graph()
+    cutomerTransactionsDFGrouped = transactionsDF.groupby("customerID")
+    print(cutomerTransactionsDFGrouped.get_group("00017496858921195E5A").head())
+    print(len(cutomerTransactionsDFGrouped))
+    print(customerInformationDF.shape)
+    print(len(transactionsDF["customerID"].unique()))
 
-    g.bind("stock", STOCK)
-    g.bind("schema", SCHEMA)
-
-    for transactionID, transaction in transactions.iterrows():
-
-        print("-------------")
-        print(transaction)
-        print(transactionID)
-        print(transaction["customerID"])
-        break
-
-
-for customerID, transactions in cutomerTransactionsDFGrouped:
-    customerInformation = customerInformationDF.loc[customerID]
-    biasIndexes = [
-        np.where(uniqueCustomerTraits[columnName] == customerInformation[columnName])[
-            0
-        ][0]
-        for columnName in CUSTOMER_BIAS_COLUMNS
+    customerInformationDF = customerInformationDF.loc[
+        ~customerInformationDF.index.duplicated(keep="first")
     ]
-    print(biasIndexes)
-    print(
-        np.array(
-            [
-                biases[columnIndex, biasIndex, :]
-                for columnIndex, biasIndex in zip(range(len(biasIndexes)), biasIndexes)
-            ]
+    customerInformationDF = customerInformationDF.map(
+        lambda x: x.replace("Predicted_", "")
+    )
+    print(customerInformationDF.shape)
+    print(customerInformationDF.head())
+
+    uniqueCustomerTraits = {
+        columnName: customerInformationDF[columnName].unique()
+        for columnName in CUSTOMER_BIAS_COLUMNS
+    }
+
+    clients = [[] for _ in range(20)]
+    biases = np.random.random_sample(
+        (
+            len(CUSTOMER_BIAS_COLUMNS),
+            max(len(unique) for unique in uniqueCustomerTraits.values()),
+            len(clients),
         )
     )
-    specBiases = np.sum(
-        np.array(
-            [
-                biases[columnIndex, biasIndex, :]
-                for columnIndex, biasIndex in zip(range(len(biasIndexes)), biasIndexes)
-            ]
-        ),
-        axis=0,
+    biases = np.apply_along_axis(lambda x: x / np.sum(x), axis=2, arr=biases)
+    print(biases[:, :, 0])
+    print(np.sum(biases[2, 0, :]))
+
+    def handleUser(g, customerID):
+        user = URIRef(USER_PREFIX + customerID)
+        userTriple = (user, RDF.type, SECURITY.User)
+        if userTriple not in g:
+            g.add(userTriple)
+        return user
+
+    def handleSecurity(g, isin):
+        security = URIRef(ISIN_PREFIX + isin)
+        securityTriple = (security, RDF.type, SECURITY.Security)
+        if securityTriple not in g:
+            g.add(securityTriple)
+        return security
+
+    def createTransactionGraph(transactions):
+        g = Graph()
+
+        g.bind("stock", SECURITY)
+        g.bind("schema", SCHEMA)
+
+        for transactionID, transaction in transactions.iterrows():
+            userURI = handleUser(g, transaction["customerID"])
+            securityURI = handleSecurity(g, transaction["ISIN"])
+
+            transactionURI = URIRef(
+                SECURITY_PREFIX + "transactions/" + str(transactionID)
+            )
+            g.add(
+                (
+                    transactionURI,
+                    RDF.type,
+                    (
+                        SECURITY.BuyTransaction
+                        if transaction["transactionType"] == "Buy"
+                        else SECURITY.SellTransaction
+                    ),
+                )
+            )
+            g.add((transactionURI, SECURITY.hasParticipant, userURI))
+            g.add((transactionURI, SECURITY.involvesSecurity, securityURI))
+            g.add(
+                (
+                    transactionURI,
+                    SECURITY.transactionValue,
+                    Literal(transaction["totalValue"], datatype=XSD.decimal),
+                )
+            )
+            g.add(
+                (
+                    transactionURI,
+                    SECURITY.transactionTimestamp,
+                    Literal(
+                        transaction["timestamp"],
+                        datatype=XSD.date,
+                    ),
+                )
+            )
+        return g
+
+    def getBiasIndexFromBiasValue(customerInformation, columnName):
+        return np.where(
+            uniqueCustomerTraits[columnName] == customerInformation[columnName]
+        )[0][0]
+
+    for customerID, transactions in tqdm(cutomerTransactionsDFGrouped):
+        customerInformation = customerInformationDF.loc[customerID]
+        biasIndexes = [
+            getBiasIndexFromBiasValue(customerInformation, columnName)
+            for columnName in CUSTOMER_BIAS_COLUMNS
+        ]
+        # print(biasIndexes)
+        # print(
+        #     np.array(
+        #         [
+        #             biases[columnIndex, biasIndex, :]
+        #             for columnIndex, biasIndex in zip(range(len(biasIndexes)), biasIndexes)
+        #         ]
+        #     )
+        # )
+        specBiases = np.sum(
+            np.array(
+                [
+                    biases[columnIndex, biasIndex, :]
+                    for columnIndex, biasIndex in zip(
+                        range(len(biasIndexes)), biasIndexes
+                    )
+                ]
+            ),
+            axis=0,
+        )
+        specBiases = specBiases / np.sum(specBiases)
+        # print(specBiases)
+        # print(np.sum(specBiases))
+        clientIndex = np.random.choice(np.arange(len(clients)), p=specBiases)
+        # print(clientIndex)
+        clients[clientIndex].append(createTransactionGraph(transactions))
+
+    print([len(client) for client in clients])
+    for clientIndex, client in enumerate(clients):
+        clientStats = [[0 for _ in types] for types in uniqueCustomerTraits.values()]
+        for graph in client:
+            customerID = next(graph[: RDF.type : SECURITY.User])[len(USER_PREFIX) :]
+            customerInformation = customerInformationDF.loc[customerID]
+            for columnIndex, columnName in enumerate(CUSTOMER_BIAS_COLUMNS):
+                clientStats[columnIndex][
+                    getBiasIndexFromBiasValue(customerInformation, columnName)
+                ] += 1
+        print(str(clientIndex) + ":\n" + str(clientStats))
+
+    return clients
+
+
+clientsPath = "./clients.pkl"
+if not os.path.exists(clientsPath):
+    clients = createClients()
+    with open(clientsPath, "wb") as file:
+        pickle.dump(clients, file)
+else:
+    with open(clientsPath, "rb") as file:
+        clients = pickle.load(file)
+
+
+# -------------------- Background Graph Creation --------------------------------
+
+backgroundContext = {
+    "@vocab": str(SECURITY),
+    "schema": str(SCHEMA),
+    "xsd": str(XSD),
+    "name": "schema:name",
+    "identifier": "schema:identifier",
+    "sector": "schema:sector",
+    "industry": "schema:industry",
+    "price": {"@id": "schema:price", "@type": "xsd:decimal"},
+    "datePublished": {"@id": "schema:datePublished", "@type": "xsd:date"},
+    "priceOf": {"@type": "@id"},
+}
+
+
+def createBackgroundGraph():
+    assetInformationDF = pd.read_csv("./FAR-Trans/asset_information.csv")
+    assetInformationDF.drop_duplicates(subset="ISIN", inplace=True)
+    closePricesDF = pd.read_csv("./FAR-Trans/close_prices.csv")
+
+    backgroundGraph = Graph()
+
+    backgroundGraph.bind("stock", SECURITY)
+    backgroundGraph.bind("schema", SCHEMA)
+
+    for index, row in tqdm(assetInformationDF.iterrows()):
+        isin = row["ISIN"]
+        if pd.notna(isin):
+            securityURI = URIRef(ISIN_PREFIX + isin)
+
+            backgroundGraph.add((securityURI, RDF.type, SECURITY.Security))
+            backgroundGraph.add((securityURI, SCHEMA.identifier, Literal(isin)))
+
+            if pd.notna(row.get("assetName")):
+                backgroundGraph.add(
+                    (securityURI, SCHEMA.name, Literal(row["assetName"]))
+                )
+            if pd.notna(row.get("assetCategory")):
+                backgroundGraph.add(
+                    (securityURI, SECURITY.assetCategory, Literal(row["assetCategory"]))
+                )
+            if pd.notna(row.get("assetSubCategory")):
+                backgroundGraph.add(
+                    (
+                        securityURI,
+                        SECURITY.assetSubCategory,
+                        Literal(row["assetSubCategory"]),
+                    )
+                )
+            if pd.notna(row.get("sector")):
+                backgroundGraph.add(
+                    (securityURI, SCHEMA.sector, Literal(row["sector"]))
+                )
+            if pd.notna(row.get("industry")):
+                backgroundGraph.add(
+                    (securityURI, SCHEMA.industry, Literal(row["industry"]))
+                )
+
+    for index, row in tqdm(closePricesDF.iterrows()):
+        isin = row["ISIN"]
+        timestamp = row["timestamp"]
+        closePrice = row["closePrice"]
+
+        if pd.notna(isin) and pd.notna(timestamp) and pd.notna(closePrice):
+            securityURI = URIRef(f"urn:isin:{isin}")
+
+            # Create a unique URI for each price observation
+            priceURI = URIRef(f"http://example.com/prices/{isin}_{timestamp}")
+
+            # Add the price observation data
+            backgroundGraph.add((priceURI, RDF.type, SECURITY.PriceObservation))
+            backgroundGraph.add((priceURI, SECURITY.priceOf, securityURI))
+            backgroundGraph.add(
+                (priceURI, SCHEMA.price, Literal(closePrice, datatype=XSD.decimal))
+            )
+            backgroundGraph.add(
+                (priceURI, SCHEMA.datePublished, Literal(timestamp, datatype=XSD.date))
+            )
+
+    print(
+        len(
+            backgroundGraph.serialize(
+                format="json-ld", context=backgroundContext, indent=2
+            )
+        )
     )
-    specBiases = specBiases / np.sum(specBiases)
-    print(specBiases)
-    print(np.sum(specBiases))
-    clientIndex = np.random.choice(np.arange(len(clients)), p=specBiases)
-    print(clientIndex)
-    clients[clientIndex].append(createTransactionGraph(transactions))
-    break
+
+
+backgroundGraphPath = "./backgroundGraph.pkl"
+if not os.path.exists(backgroundGraphPath):
+    backgroundGraph = createBackgroundGraph()
+    with open(backgroundGraphPath, "wb") as file:
+        pickle.dump(backgroundGraph, file)
+else:
+    with open(backgroundGraphPath, "rb") as file:
+        backgroundGraph = pickle.load(file)
