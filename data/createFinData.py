@@ -3,9 +3,12 @@ import pandas as pd
 import numpy as np
 from rdflib import Graph, Literal, RDF, URIRef, Namespace
 from rdflib.namespace import XSD
-from datetime import datetime
+from datetime import datetime, timedelta
 from tqdm import tqdm
+from itertools import chain
+from dateutil.relativedelta import relativedelta
 import os
+import json
 
 np.random.seed(2025)
 
@@ -29,6 +32,8 @@ transactionContext = {
     "involvesSecurity": {"@type": "@id"},
 }
 
+transactionsDF = pd.read_csv("./FAR-Trans/transactions.csv", index_col="transactionID")
+
 
 def createClients():
 
@@ -39,9 +44,7 @@ def createClients():
         index_col="customerID",
         usecols=["customerID"] + CUSTOMER_BIAS_COLUMNS,
     )
-    transactionsDF = pd.read_csv(
-        "./FAR-Trans/transactions.csv", index_col="transactionID"
-    )
+    global transactionsDF
 
     print(transactionsDF.head())
 
@@ -214,11 +217,13 @@ backgroundContext = {
     "priceOf": {"@type": "@id"},
 }
 
+closePricesDF = pd.read_csv("./FAR-Trans/close_prices.csv")
+
 
 def createBackgroundGraph():
     assetInformationDF = pd.read_csv("./FAR-Trans/asset_information.csv")
     assetInformationDF.drop_duplicates(subset="ISIN", inplace=True)
-    closePricesDF = pd.read_csv("./FAR-Trans/close_prices.csv")
+    global closePricesDF
 
     backgroundGraph = Graph()
 
@@ -287,6 +292,8 @@ def createBackgroundGraph():
     #     )
     # )
 
+    return backgroundGraph
+
 
 backgroundGraphPath = "./backgroundGraph.pkl"
 if not os.path.exists(backgroundGraphPath):
@@ -298,38 +305,256 @@ else:
         backgroundGraph = pickle.load(file)
 
 
-def get_subgraph_until_date(graph: Graph, endDate: str) -> Graph:
-    # 1. Setup the new subgraph
+# ----------------------------- LLM Input Creation ----------------------------------
+
+
+def getBackgroundSubgraphUntilDate(graph: Graph, endDate: datetime) -> Graph:
     subgraph = Graph()
-    subgraph.bind("ex", EX)
+    subgraph.bind("stock", SECURITY)
     subgraph.bind("schema", SCHEMA)
 
-    # Parse the end date for comparison
-    end_date = datetime.strptime(endDate, "%Y-%m-%d").date()
+    # endDate = datetime.strptime(endDate, "%Y-%m-%d").date()
 
-    # A set to keep track of securities we've already added to avoid duplication
-    added_securities = set()
+    addedSecurities = set()
 
-    # 2. Find and filter all price observations
-    # We query for the price observation, its date, and the security it belongs to.
-    for price_obs, _, price_date_literal, security_uri in graph.triples_choices(
-        (None, RDF.type, EX.PriceObservation),  # Subject is a PriceObservation
-        (None, SCHEMA.datePublished, None),  # Get its date
-        (None, EX.priceOf, None),  # Get the security it's for
-    ):
-        # Convert the literal date from the graph into a Python date object
-        current_price_date = price_date_literal.toPython()
+    for priceObservation in tqdm(graph[: RDF.type : SECURITY.PriceObservation]):
+        priceDate = next(graph[priceObservation : SCHEMA.datePublished :]).toPython()
 
-        # 3. If the date is within the desired range, copy the data
-        if current_price_date <= end_date:
-            # Copy all triples related to this specific price observation
-            for s, p, o in graph.triples((price_obs, None, None)):
+        if priceDate <= endDate:
+            for s, p, o in graph.triples((priceObservation, None, None)):
                 subgraph.add((s, p, o))
 
-            # If we haven't processed this security yet, copy its descriptive info
-            if security_uri not in added_securities:
-                for s, p, o in graph.triples((security_uri, None, None)):
+            securityURI = next(graph[priceObservation : SECURITY.priceOf :])
+            if securityURI not in addedSecurities:
+                for s, p, o in graph.triples((securityURI, None, None)):
                     subgraph.add((s, p, o))
-                added_securities.add(security_uri)
+                addedSecurities.add(securityURI)
 
     return subgraph
+
+
+# print("------------------------------")
+# print(
+#     len(
+#         getBackgroundSubgraphUntilDate(backgroundGraph, "2018-06-01").serialize(
+#             format="json-ld", context=backgroundContext, indent=2
+#         )
+#     )
+# )
+
+
+def getCustomerSubgraphUntilDate(graph: Graph, endDate: datetime) -> Graph:
+    subgraph = Graph()
+    subgraph.bind("stock", SECURITY)
+    subgraph.bind("schema", SCHEMA)
+
+    # endDate = datetime.strptime(endDate, "%Y-%m-%d").date()
+
+    addedEntities = set()
+
+    for transactionURI in tqdm(
+        chain(
+            graph[: RDF.type : SECURITY.BuyTransaction],
+            graph[: RDF.type : SECURITY.SellTransaction],
+        )
+    ):
+        priceDate = next(
+            graph[transactionURI : SECURITY.transactionTimestamp :]
+        ).toPython()
+
+        if priceDate <= endDate:
+            for s, p, o in graph.triples((transactionURI, None, None)):
+                subgraph.add((s, p, o))
+
+            def addEntity(relation):
+                entity = next(graph[transactionURI:relation:])
+                if entity not in addedEntities:
+                    for s, p, o in graph.triples((entity, None, None)):
+                        subgraph.add((s, p, o))
+                    addedEntities.add(entity)
+
+            addEntity(SECURITY.involvesSecurity)
+            addEntity(SECURITY.hasParticipant)
+
+    return subgraph
+
+
+# for client in clients:
+#     for graph in client:
+#         graphLen = len(graph)
+#         if graphLen > 100:
+#             print(graphLen)
+# print("------------------------------")
+# print(
+#     len(
+#         getCustomerSubgraphUntilDate(clients[4][10], "2018-06-01").serialize(
+#             format="json-ld", context=transactionContext, indent=2
+#         )
+#     )
+# )
+
+SYSTEM_PROMPT_TASK = """You are an expert financial analyst AI. Your task is to analyze a user's transaction history and supplementary market data to provide personalized asset recommendations. The user will ask for recommendations for the next 6 months from a given "current date".
+
+You MUST provide your response in the following format, and only this format:
+[An introductory sentence]
+- [ASSET_ISIN_1]
+- [ASSET_ISIN_2]
+- [ASSET_ISIN_3]"""
+SYSTEM_PROMPT_BACKGROUND = """Here is the supplementary knowledge graph with asset information and historical prices in JSON-LD format:
+
+```jsonld
+{}
+```"""
+SYSTEM_PROMPT_TRANSACTION = """Here is the user's transaction history in JSON-LD format:
+
+```jsonld
+{}
+```"""
+USER_PROMPT = """Considering all the provided data, and assuming the current date is {}, please provide a list of asset recommendations for my portfolio for the next 6 months."""
+
+customerSubgraphStrings = {}
+backgroundSubgraphStrings = {}
+
+
+def getCustomerSubgraphUntilDateString(graph: Graph, endDate: datetime):
+    global customerSubgraphStrings
+    if endDate not in customerSubgraphStrings:
+        customerSubgraphStrings[endDate] = getCustomerSubgraphUntilDate(
+            graph, endDate
+        ).serialize(format="json-ld", context=transactionContext, indent=2)
+    return customerSubgraphStrings[endDate]
+
+
+def getBackgroundSubgraphUntilDateString(graph: Graph, endDate: datetime):
+    global backgroundSubgraphStrings
+    if endDate not in backgroundSubgraphStrings:
+        backgroundSubgraphStrings[endDate] = getBackgroundSubgraphUntilDate(
+            graph, endDate
+        ).serialize(format="json-ld", context=backgroundContext, indent=2)
+    return backgroundSubgraphStrings[endDate]
+
+
+def generate_kto_data(
+    transactionGraph: str,
+    currDate: datetime,
+    closePricesDF: pd.DataFrame = closePricesDF,
+    transactionsDF: pd.DataFrame = transactionsDF,
+):
+    """
+    Generates KTO training examples for a given user and evaluation date.
+
+    Args:
+        transactionGraph: The transaction graph of the user to generate data for.
+        currDate: The 'current date' for the recommendation in 'YYYY-MM-DD' format.
+        closePricesDF: DataFrame of ALL historical prices.
+        transactionsDF: DataFrame of ALL user transactions.
+
+    Yields:
+        A dictionary for each KTO example containing the prompt and the completion.
+    """
+    # 1. Setup dates
+    futureDate = currDate + relativedelta(months=+6)
+    customerID = next(transactionGraph[: RDF.type : SECURITY.User])[len(USER_PREFIX) :]
+
+    # 2. Find assets the user ACTUALLY bought in the next 6 months
+    futureTransactions = transactionsDF[
+        (transactionsDF["customerID"] == customerID)
+        & (pd.to_datetime(transactionsDF["timestamp"]) > currDate)
+        & (pd.to_datetime(transactionsDF["timestamp"]) <= futureDate)
+        & (transactionsDF["transactionType"] == "Buy")
+    ]
+    future_purchases = set(futureTransactions["ISIN"].unique())
+    if len(future_purchases) == 0:
+        return []
+
+    # 3. Find assets that were PROFITABLE in the next 6 months
+    goodAssets = set()
+    for isin in future_purchases:
+        try:
+            start_price_row = (
+                closePricesDF[
+                    (closePricesDF["ISIN"] == isin)
+                    & (pd.to_datetime(closePricesDF["timestamp"]) <= currDate)
+                ]
+                .sort_values(by="timestamp", ascending=False)
+                .iloc[0]
+            )
+
+            end_price_row = (
+                closePricesDF[
+                    (closePricesDF["ISIN"] == isin)
+                    & (pd.to_datetime(closePricesDF["timestamp"]) > currDate)
+                    & (pd.to_datetime(closePricesDF["timestamp"]) <= futureDate)
+                ]
+                .sort_values(by="timestamp", ascending=False)
+                .iloc[0]
+            )
+
+            if end_price_row["closePrice"] > start_price_row["closePrice"]:
+                goodAssets.add(isin)
+        except IndexError:
+            # Not enough price data to determine profitability
+            continue
+    if len(goodAssets) == 0:
+        return []
+
+    # 4. Determine GOOD and BAD assets based on your criteria
+    badAssets = set(closePricesDF["ISIN"].unique()) - goodAssets
+
+    # 5. Yield KTO data points
+    # (Here you would generate the filtered KGs for the prompt)
+    # prompt_background_kg = get_subgraph_until_date(...)
+    # prompt_user_kg = get_transactions_subgraph_until_date(...)
+
+    prompt = [
+        {"content": SYSTEM_PROMPT_TASK, "role": "system"},
+        {
+            "content": SYSTEM_PROMPT_BACKGROUND.format(
+                getBackgroundSubgraphUntilDateString(transactionGraph, currDate)
+            ),
+            "role": "system",
+        },
+        {
+            "content": SYSTEM_PROMPT_TRANSACTION.format(
+                getCustomerSubgraphUntilDateString(backgroundGraph, currDate)
+            ),
+            "role": "system",
+        },
+        {"content": USER_PROMPT.format(currDate.date()), "role": "user"},
+    ]
+
+    def createDatapoint(assets, label):
+        return {
+            "prompt": prompt,
+            "completion": f"Here are my asset recommendations:\n- {"\n- ".join(assets)}",
+            "label": label,
+        }
+
+    return [createDatapoint(goodAssets, True), createDatapoint(badAssets, False)]
+
+
+ktoDataset = [[] for _ in range(len(clients))]
+
+trainDateLimit = pd.to_datetime("2021-12-1") - relativedelta(months=+6)
+startTrainDate = pd.to_datetime("2019-08-1")
+for clientIndex, client in enumerate(tqdm(clients)):
+    for currDate in tqdm(
+        pd.date_range(trainDateLimit, startTrainDate, freq=timedelta(weeks=-4))
+    ):
+        for graph in tqdm(client):
+            ktoDataset[clientIndex].extend(
+                generate_kto_data(
+                    graph,
+                    currDate,
+                )
+            )
+
+with open("finDataset.json", "w") as file:
+    json.dump(ktoDataset, file, indent=4)
+
+nonFederatedDataset = []
+for client in ktoDataset.values():
+    nonFederatedDataset.extend(client)
+
+with open("nonFedFinDataset.json", "w") as file:
+    json.dump(nonFederatedDataset, file, indent=4)
