@@ -2,7 +2,7 @@
 
 dataset:
   path: "./data/{}.json"
-  name: "nonFederatedMovieKnowledgeGraphDatasetWithSyntheticData"
+  name: "nonFedFinDataset"
 
 model:
   name: "Qwen/Qwen3-0.6B"
