@@ -6,7 +6,6 @@ from rdflib.namespace import XSD
 from datetime import datetime, timedelta
 from tqdm import tqdm
 from itertools import chain
-from dateutil.relativedelta import relativedelta
 import os
 import json
 
@@ -415,6 +414,19 @@ USER_PROMPT = """Considering all the provided data, and assuming the current dat
 customerSubgraphStrings = {}
 backgroundSubgraphStrings = {}
 
+allAssets = set(closePricesDF["ISIN"].unique())
+closePricesDF["timestamp"] = pd.to_datetime(closePricesDF["timestamp"])
+for timst in closePricesDF["timestamp"]:
+    if not isinstance(timst, pd.Timestamp):
+        print(timst)
+closePricesDF.set_index(["ISIN", "timestamp"], inplace=True)
+closePricesDF.sort_index(inplace=True)
+
+transactionsDF["timestamp"] = pd.to_datetime(transactionsDF["timestamp"])
+transactionsDF.reset_index(inplace=True)
+transactionsDF.set_index(["customerID", "timestamp"], inplace=True)
+transactionsDF.sort_index(inplace=True)
+
 
 def getCustomerSubgraphUntilDateString(graph: Graph, endDate: datetime):
     global customerSubgraphStrings
@@ -453,44 +465,33 @@ def generate_kto_data(
         A dictionary for each KTO example containing the prompt and the completion.
     """
     # 1. Setup dates
-    futureDate = currDate + relativedelta(months=+6)
+    futureDate = currDate + timedelta(days=180)
     customerID = next(transactionGraph[: RDF.type : SECURITY.User])[len(USER_PREFIX) :]
 
     # 2. Find assets the user ACTUALLY bought in the next 6 months
-    futureTransactions = transactionsDF[
-        (transactionsDF["customerID"] == customerID)
-        & (pd.to_datetime(transactionsDF["timestamp"]) > currDate)
-        & (pd.to_datetime(transactionsDF["timestamp"]) <= futureDate)
-        & (transactionsDF["transactionType"] == "Buy")
-    ]
-    future_purchases = set(futureTransactions["ISIN"].unique())
-    if len(future_purchases) == 0:
+    futureTransactions = transactionsDF.query(
+        "customerID == @customerID and \
+        timestamp > @currDate and \
+        timestamp <= @futureDate and \
+        transactionType == 'Buy'"
+    )
+    futurePurchases = set(futureTransactions["ISIN"].unique())
+    if len(futurePurchases) == 0:
         return []
 
     # 3. Find assets that were PROFITABLE in the next 6 months
     goodAssets = set()
-    for isin in future_purchases:
+    for isin in futurePurchases:
         try:
-            start_price_row = (
-                closePricesDF[
-                    (closePricesDF["ISIN"] == isin)
-                    & (pd.to_datetime(closePricesDF["timestamp"]) <= currDate)
-                ]
-                .sort_values(by="timestamp", ascending=False)
-                .iloc[0]
-            )
+            startPrice = closePricesDF.query(
+                "ISIN == @isin and timestamp <= @currDate"
+            ).iloc[-1]["closePrice"]
 
-            end_price_row = (
-                closePricesDF[
-                    (closePricesDF["ISIN"] == isin)
-                    & (pd.to_datetime(closePricesDF["timestamp"]) > currDate)
-                    & (pd.to_datetime(closePricesDF["timestamp"]) <= futureDate)
-                ]
-                .sort_values(by="timestamp", ascending=False)
-                .iloc[0]
-            )
+            endPrice = closePricesDF.query(
+                "ISIN == @isin and timestamp > @currDate and timestamp <= @futureDate"
+            ).iloc[-1]["closePrice"]
 
-            if end_price_row["closePrice"] > start_price_row["closePrice"]:
+            if endPrice > startPrice:
                 goodAssets.add(isin)
         except IndexError:
             # Not enough price data to determine profitability
@@ -499,7 +500,7 @@ def generate_kto_data(
         return []
 
     # 4. Determine GOOD and BAD assets based on your criteria
-    badAssets = set(closePricesDF["ISIN"].unique()) - goodAssets
+    badAssets = allAssets - goodAssets
 
     # 5. Yield KTO data points
     # (Here you would generate the filtered KGs for the prompt)
@@ -535,7 +536,7 @@ def generate_kto_data(
 
 ktoDataset = [[] for _ in range(len(clients))]
 
-trainDateLimit = pd.to_datetime("2021-12-1") - relativedelta(months=+6)
+trainDateLimit = pd.to_datetime("2021-12-1") - timedelta(days=180)
 startTrainDate = pd.to_datetime("2019-08-1")
 for clientIndex, client in enumerate(tqdm(clients)):
     for currDate in tqdm(
