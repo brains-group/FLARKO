@@ -5,3 +5,5 @@ __pycache__
 /outputs
 /data/FAR-Trans/
 pyEnv.sh
+*.err
+*.out

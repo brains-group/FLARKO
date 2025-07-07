@@ -10,5 +10,5 @@
 #SBATCH --output=%x_%j.out
 #SBATCH --error=%x_%j.err
 
-conda run -n ft python createFinDataset.py
+conda run -n ft python createFinData.py
 
