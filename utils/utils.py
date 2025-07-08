@@ -399,7 +399,7 @@ def gen_client_fn(
 
         # Let's get the partition corresponding to the i-th client
         partition_id = int(context.node_config["partition-id"])
-        client_trainset = Dataset.from_list(list(datasets.values())[partition_id])
+        client_trainset = Dataset.from_list(datasets[partition_id])
         return FlowerClient(
             model_cfg,
             train_cfg,

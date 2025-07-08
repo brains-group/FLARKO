@@ -38,6 +38,8 @@ train:
     save_total_limit: 10
     gradient_checkpointing: ${model.gradient_checkpointing}
     lr_scheduler_type: "constant"
+    report_to: null
+    run_name: null
 
 
 flower:

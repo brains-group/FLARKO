@@ -37,7 +37,7 @@ print_config(cfg)
 
 with open(cfg.dataset.path.format(cfg.dataset.name), "r") as file:
     datasets = json.load(file)
-cfg.flower.num_clients = len(datasets.keys())
+cfg.flower.num_clients = len(datasets)
 print(cfg.flower.num_clients)
 
 # ===== Define the tokenizer =====
@@ -55,6 +55,12 @@ print(f"pad_token_id: {tokenizer.pad_token_id}")
 runTimestamp = (datetime.now()).strftime("%Y%m%d%H%M%S")
 save_path = f"./models/{modelFolderName}/{cfg.dataset.name}/{runTimestamp}"
 
+wandb.init(
+    project="finrec-kto",  # Or any project name you prefer
+    name=f"federated-{modelFolderName}-{cfg.dataset.name}-{runTimestamp}",
+    config=dict(cfg),  # Log your configuration
+)
+
 cfg.train.training_arguments.report_to = "wandb"
 cfg.train.training_arguments.run_name = wandb.run.name
 
@@ -68,13 +74,6 @@ client = fl.client.ClientApp(
     ),
     # mods=[fixedclipping_mod] # For Differential Privacy
 )
-
-wandb.init(
-    project="finrec-kto",  # Or any project name you prefer
-    name=f"federated-{modelFolderName}-{cfg.dataset.name}-{runTimestamp}",
-    config=dict(cfg),  # Log your configuration
-)
-
 
 def server_fn(context: Context):
 
