@@ -12,6 +12,7 @@ from flwr.server.strategy import DifferentialPrivacyClientSideFixedClipping
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from datetime import datetime
 import argparse
+import wandb
 
 from utils.utils import *
 
@@ -45,7 +46,14 @@ if tokenizer.pad_token is None:
     )
 print(f"pad_token_id: {tokenizer.pad_token_id}")
 
-save_path = f"./models/centralized/{modelFolderName}/{cfg.dataset.name}/{(datetime.now()).strftime("%Y%m%d%H%M%S")}"
+runTimestamp = (datetime.now()).strftime("%Y%m%d%H%M%S")
+save_path = f"./models/centralized/{modelFolderName}/{cfg.dataset.name}/{runTimestamp}"
+
+wandb.init(
+    project="finrec-kto",  # Or any project name you prefer
+    name=f"centralized-{modelFolderName}-{cfg.dataset.name}-{runTimestamp}",
+    config=dict(cfg),  # Log your configuration
+)
 
 model = get_model(cfg.model)
 
@@ -69,6 +77,8 @@ training_argumnets = KTOConfig(
     output_dir=save_path,
     desirable_weight=desirable_weight,
     undesirable_weight=undesirable_weight,
+    report_to="wandb",
+    run_name=wandb.run.name,
 )
 
 trainer = KTOTrainer(
@@ -82,3 +92,14 @@ trainer = KTOTrainer(
 results = trainer.train()
 
 model.save_pretrained(save_path)
+
+# ## W&B ## 3. (Optional but recommended) Log the final model as an artifact
+# # This creates a versioned backup of your model in W&B.
+# model_artifact = wandb.Artifact(
+#     name=wandb.run.name,
+#     type="model"
+# )
+# model_artifact.add_dir(save_path) # Add the entire model directory
+# wandb.log_artifact(model_artifact)
+
+wandb.finish()
