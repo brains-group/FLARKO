@@ -17,14 +17,13 @@ model:
   rope_scaling:
     rope_type: "yarn"
     factor: 4.0
-    original_max_position_embeddings: 32768
 
 train:
   num_rounds: ${flower.num_rounds}
   save_every_round: 5
   learning_rate_max: 5e-5
   learning_rate_min: 1e-6
-  seq_length: 4096
+  seq_length: 131072
   padding_side: "left"
   evaluate_split: false
   training_arguments:

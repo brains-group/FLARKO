@@ -16,13 +16,14 @@ import wandb
 
 from utils.utils import *
 
-cfg = get_config("federated_full")
-
 parser = argparse.ArgumentParser()
+parser.add_argument("--cfg_file", type=str, default="federated_full")
 parser.add_argument("--base_model_path", type=str, default=None)
 parser.add_argument("--num_rounds", type=str, default=None)
 parser.add_argument("--dataset_name", type=str, default=None)
 args = parser.parse_args()
+
+cfg = get_config(args.cfg_file)
 
 modelFolderName = cfg.model.name
 if args.base_model_path is not None:
