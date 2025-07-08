@@ -9,6 +9,7 @@ from tqdm import tqdm
 from itertools import chain
 import os
 import json
+
 # from transformers import AutoTokenizer
 
 np.random.seed(2025)
@@ -576,9 +577,10 @@ def createKTODataset():
     startTrainDate = pd.to_datetime("2019-08-1")
     for clientIndex, client in enumerate(tqdm(clients)):
         for currDate in tqdm(
-            pd.date_range(trainDateLimit, startTrainDate, freq=timedelta(weeks=-4))
+            pd.date_range(trainDateLimit, startTrainDate, freq=timedelta(weeks=-4)),
+            leave=False,
         ):
-            for graph in tqdm(client):
+            for graph in tqdm(client, leave=False):
                 if random.random() < 0.2:
                     ktoDataset[clientIndex].extend(
                         generate_kto_data(
