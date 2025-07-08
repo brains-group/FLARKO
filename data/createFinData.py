@@ -322,7 +322,7 @@ def getBackgroundSubgraphUntilDate(graph: Graph, endDate: datetime) -> Graph:
 
     datapoints = list(graph[: RDF.type : SECURITY.PriceObservation])
 
-    for priceObservation in tqdm(
+    for priceObservation in (
         random.sample(datapoints, MAX_GRAPH_LENGTH)
         if len(datapoints) > MAX_GRAPH_LENGTH
         else datapoints
@@ -368,7 +368,7 @@ def getCustomerSubgraphUntilDate(graph: Graph, endDate: datetime) -> Graph:
         )
     )
 
-    for transactionURI in tqdm(
+    for transactionURI in (
         random.sample(
             datapoints,
             MAX_GRAPH_LENGTH,
@@ -435,9 +435,6 @@ USER_PROMPT = """Considering all the provided data, and assuming the current dat
 
 allAssets = set(closePricesDF["ISIN"].unique())
 closePricesDF["timestamp"] = pd.to_datetime(closePricesDF["timestamp"])
-for timst in closePricesDF["timestamp"]:
-    if not isinstance(timst, pd.Timestamp):
-        print(timst)
 closePricesDF.set_index(["ISIN", "timestamp"], inplace=True)
 closePricesDF.sort_index(inplace=True)
 
@@ -580,14 +577,13 @@ def createKTODataset():
             pd.date_range(trainDateLimit, startTrainDate, freq=timedelta(weeks=-4)),
             leave=False,
         ):
-            for graph in tqdm(client, leave=False):
-                if random.random() < 0.2:
-                    ktoDataset[clientIndex].extend(
-                        generate_kto_data(
-                            graph,
-                            currDate,
-                        )
+            for graph in tqdm(random.sample(client, int(len(client) / 5)), leave=False):
+                ktoDataset[clientIndex].extend(
+                    generate_kto_data(
+                        graph,
+                        currDate,
                     )
+                )
     return ktoDataset
 
 
