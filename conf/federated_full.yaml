@@ -14,6 +14,10 @@ model:
     peft_lora_r: 16
     peft_lora_alpha: 64
     target_modules: ["q_proj","v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+  rope_scaling:
+    rope_type: "yarn"
+    factor: 4.0
+    original_max_position_embeddings: 32768
 
 train:
   num_rounds: ${flower.num_rounds}
@@ -31,7 +35,6 @@ train:
     logging_steps: 10
     num_train_epochs: 3
     max_steps: 10
-    report_to: null
     save_steps: 1000
     save_total_limit: 10
     gradient_checkpointing: ${model.gradient_checkpointing}

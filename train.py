@@ -12,6 +12,7 @@ from flwr.server.strategy import DifferentialPrivacyClientSideFixedClipping
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from datetime import datetime
 import argparse
+import wandb
 
 from utils.utils import *
 
@@ -50,7 +51,12 @@ if tokenizer.pad_token is None:
     )
 print(f"pad_token_id: {tokenizer.pad_token_id}")
 
-save_path = f"./models/{modelFolderName}/{cfg.dataset.name}/{(datetime.now()).strftime("%Y%m%d%H%M%S")}"
+runTimestamp = (datetime.now()).strftime("%Y%m%d%H%M%S")
+save_path = f"./models/{modelFolderName}/{cfg.dataset.name}/{runTimestamp}"
+
+cfg.train.training_arguments.report_to = "wandb"
+cfg.train.training_arguments.run_name = wandb.run.name
+
 client = fl.client.ClientApp(
     client_fn=gen_client_fn(
         datasets,
@@ -60,6 +66,12 @@ client = fl.client.ClientApp(
         save_path,
     ),
     # mods=[fixedclipping_mod] # For Differential Privacy
+)
+
+wandb.init(
+    project="finrec-kto",  # Or any project name you prefer
+    name=f"federated-{modelFolderName}-{cfg.dataset.name}-{runTimestamp}",
+    config=dict(cfg),  # Log your configuration
 )
 
 
@@ -108,3 +120,5 @@ fl.simulation.run_simulation(
     backend_config={"client_resources": client_resources, "init_args": backend_setup},
     verbose_logging=True,
 )
+
+wandb.finish()

@@ -214,6 +214,7 @@ def get_model(model_cfg: DictConfig):
         quantization_config=quantization_config,
         torch_dtype=torch.bfloat16,
         low_cpu_mem_usage=True,
+        rope_scaling=model_cfg.rope_scaling,
     )
 
     if use_cuda:

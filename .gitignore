@@ -8,3 +8,4 @@ pyEnv.sh
 *.err
 *.out
 *.sh
+wandb/

@@ -1,4 +1,5 @@
 import pickle
+import random
 import pandas as pd
 import numpy as np
 from rdflib import Graph, Literal, RDF, URIRef, Namespace
@@ -8,6 +9,7 @@ from tqdm import tqdm
 from itertools import chain
 import os
 import json
+# from transformers import AutoTokenizer
 
 np.random.seed(2025)
 
@@ -305,6 +307,7 @@ else:
 
 
 # ----------------------------- LLM Input Creation ----------------------------------
+MAX_GRAPH_LENGTH = 500
 
 
 def getBackgroundSubgraphUntilDate(graph: Graph, endDate: datetime) -> Graph:
@@ -316,10 +319,16 @@ def getBackgroundSubgraphUntilDate(graph: Graph, endDate: datetime) -> Graph:
 
     addedSecurities = set()
 
-    for priceObservation in tqdm(graph[: RDF.type : SECURITY.PriceObservation]):
+    datapoints = list(graph[: RDF.type : SECURITY.PriceObservation])
+
+    for priceObservation in tqdm(
+        random.sample(datapoints, MAX_GRAPH_LENGTH)
+        if len(datapoints) > MAX_GRAPH_LENGTH
+        else datapoints
+    ):
         priceDate = next(graph[priceObservation : SCHEMA.datePublished :]).toPython()
 
-        if priceDate <= endDate:
+        if priceDate <= endDate.date():
             for s, p, o in graph.triples((priceObservation, None, None)):
                 subgraph.add((s, p, o))
 
@@ -351,17 +360,26 @@ def getCustomerSubgraphUntilDate(graph: Graph, endDate: datetime) -> Graph:
 
     addedEntities = set()
 
-    for transactionURI in tqdm(
+    datapoints = list(
         chain(
             graph[: RDF.type : SECURITY.BuyTransaction],
             graph[: RDF.type : SECURITY.SellTransaction],
         )
+    )
+
+    for transactionURI in tqdm(
+        random.sample(
+            datapoints,
+            MAX_GRAPH_LENGTH,
+        )
+        if len(datapoints) > MAX_GRAPH_LENGTH
+        else datapoints
     ):
         priceDate = next(
             graph[transactionURI : SECURITY.transactionTimestamp :]
         ).toPython()
 
-        if priceDate <= endDate:
+        if priceDate <= endDate.date():
             for s, p, o in graph.triples((transactionURI, None, None)):
                 subgraph.add((s, p, o))
 
@@ -411,8 +429,8 @@ SYSTEM_PROMPT_TRANSACTION = """Here is the user's transaction history in JSON-LD
 ```"""
 USER_PROMPT = """Considering all the provided data, and assuming the current date is {}, please provide a list of asset recommendations for my portfolio for the next 6 months."""
 
-customerSubgraphStrings = {}
-backgroundSubgraphStrings = {}
+# customerSubgraphStrings = {}
+# backgroundSubgraphStrings = {}
 
 allAssets = set(closePricesDF["ISIN"].unique())
 closePricesDF["timestamp"] = pd.to_datetime(closePricesDF["timestamp"])
@@ -429,25 +447,31 @@ transactionsDF.sort_index(inplace=True)
 
 
 def getCustomerSubgraphUntilDateString(graph: Graph, endDate: datetime):
-    global customerSubgraphStrings
-    if endDate not in customerSubgraphStrings:
-        customerSubgraphStrings[endDate] = getCustomerSubgraphUntilDate(
-            graph, endDate
-        ).serialize(format="json-ld", context=transactionContext, indent=2)
-    return customerSubgraphStrings[endDate]
+    # global customerSubgraphStrings
+    # if endDate not in customerSubgraphStrings:
+    #     customerSubgraphStrings[endDate] = getCustomerSubgraphUntilDate(
+    #         graph, endDate
+    #     ).serialize(format="json-ld", context=transactionContext, indent=2)
+    # return customerSubgraphStrings[endDate]
+    return getCustomerSubgraphUntilDate(graph, endDate).serialize(
+        format="json-ld", context=transactionContext, indent=2
+    )
 
 
 def getBackgroundSubgraphUntilDateString(graph: Graph, endDate: datetime):
-    global backgroundSubgraphStrings
-    if endDate not in backgroundSubgraphStrings:
-        backgroundSubgraphStrings[endDate] = getBackgroundSubgraphUntilDate(
-            graph, endDate
-        ).serialize(format="json-ld", context=backgroundContext, indent=2)
-    return backgroundSubgraphStrings[endDate]
+    # global backgroundSubgraphStrings
+    # if endDate not in backgroundSubgraphStrings:
+    #     backgroundSubgraphStrings[endDate] = getBackgroundSubgraphUntilDate(
+    #         graph, endDate
+    #     ).serialize(format="json-ld", context=backgroundContext, indent=2)
+    # return backgroundSubgraphStrings[endDate]
+    return getBackgroundSubgraphUntilDate(graph, endDate).serialize(
+        format="json-ld", context=backgroundContext, indent=2
+    )
 
 
 def generate_kto_data(
-    transactionGraph: str,
+    transactionGraph: Graph,
     currDate: datetime,
     closePricesDF: pd.DataFrame = closePricesDF,
     transactionsDF: pd.DataFrame = transactionsDF,
@@ -502,6 +526,12 @@ def generate_kto_data(
     # 4. Determine GOOD and BAD assets based on your criteria
     badAssets = allAssets - goodAssets
 
+    maxRecommendations = 20
+    if len(goodAssets) > maxRecommendations:
+        goodAssets = random.sample(list(goodAssets), maxRecommendations)
+    if len(badAssets) > maxRecommendations:
+        badAssets = random.sample(list(badAssets), maxRecommendations)
+
     # 5. Yield KTO data points
     # (Here you would generate the filtered KGs for the prompt)
     # prompt_background_kg = get_subgraph_until_date(...)
@@ -511,13 +541,13 @@ def generate_kto_data(
         {"content": SYSTEM_PROMPT_TASK, "role": "system"},
         {
             "content": SYSTEM_PROMPT_BACKGROUND.format(
-                getBackgroundSubgraphUntilDateString(transactionGraph, currDate)
+                getBackgroundSubgraphUntilDateString(backgroundGraph, currDate)
             ),
             "role": "system",
         },
         {
             "content": SYSTEM_PROMPT_TRANSACTION.format(
-                getCustomerSubgraphUntilDateString(backgroundGraph, currDate)
+                getCustomerSubgraphUntilDateString(transactionGraph, currDate)
             ),
             "role": "system",
         },
@@ -527,7 +557,12 @@ def generate_kto_data(
     def createDatapoint(assets, label):
         return {
             "prompt": prompt,
-            "completion": f"Here are my asset recommendations:\n- {"\n- ".join(assets)}",
+            "completion": [
+                {
+                    "content": f"Here are my asset recommendations:\n- {"\n- ".join(assets)}",
+                    "role": "assistant",
+                }
+            ],
             "label": label,
         }
 
@@ -544,27 +579,77 @@ def createKTODataset():
             pd.date_range(trainDateLimit, startTrainDate, freq=timedelta(weeks=-4))
         ):
             for graph in tqdm(client):
-                ktoDataset[clientIndex].extend(
-                    generate_kto_data(
-                        graph,
-                        currDate,
+                if random.random() < 0.2:
+                    ktoDataset[clientIndex].extend(
+                        generate_kto_data(
+                            graph,
+                            currDate,
+                        )
                     )
-                )
     return ktoDataset
 
+
+# tokenizer = AutoTokenizer.from_pretrained(
+#     "Qwen/Qwen3-0.6B",
+#     use_fast=False,
+#     # padding_side=cfg.train.padding_side,
+# )
+# tokenizer(
+#     getBackgroundSubgraphUntilDateString(backgroundGraph, pd.to_datetime("2021-12-1"))
+# )
+# test = clients[0][0]
+# for client in clients:
+#     for graph in client:
+#         if len(graph) > len(test):
+#             test = graph
+# text = tokenizer.apply_chat_template(
+#     [
+#         {"content": SYSTEM_PROMPT_TASK, "role": "system"},
+#         {
+#             "content": SYSTEM_PROMPT_BACKGROUND.format(
+#                 getBackgroundSubgraphUntilDateString(
+#                     backgroundGraph, pd.to_datetime("2021-12-1")
+#                 )
+#             ),
+#             "role": "system",
+#         },
+#         {
+#             "content": SYSTEM_PROMPT_TRANSACTION.format(
+#                 getCustomerSubgraphUntilDateString(test, pd.to_datetime("2021-12-1"))
+#             ),
+#             "role": "system",
+#         },
+#         {
+#             "content": USER_PROMPT.format(pd.to_datetime("2021-12-1").date()),
+#             "role": "user",
+#         },
+#     ],
+#     tokenize=False,
+#     add_generation_prompt=True,
+#     enable_thinking=True,  # Switches between thinking and non-thinking modes. Default is True.
+# )
+# model_inputs = tokenizer([text], return_tensors="pt")
+# print('len(model_inputs["input_ids"]): ' + str(len(model_inputs["input_ids"][0])))
+# exit()
 
 ktoDatasetPath = "./finDataset.json"
 if not os.path.exists(ktoDatasetPath):
     ktoDataset = createKTODataset()
     with open(ktoDatasetPath, "w") as file:
-        json.dump(file, file, indent=4)
+        json.dump(ktoDataset, file, indent=4)
 else:
     with open(ktoDatasetPath, "r") as file:
         ktoDataset = json.load(file)
 
-nonFederatedDataset = []
-for client in ktoDataset:
-    nonFederatedDataset.extend(client)
+ktoNonfedDatasetPath = "./nonFedFinDataset.json"
+if not os.path.exists(ktoNonfedDatasetPath):
+    nonFederatedDataset = []
+    for client in ktoDataset:
+        nonFederatedDataset.extend(client)
+    with open(ktoNonfedDatasetPath, "w") as file:
+        json.dump(nonFederatedDataset, file, indent=4)
+else:
+    with open(ktoNonfedDatasetPath, "r") as file:
+        nonFederatedDataset = json.load(file)
 
-with open("nonFedFinDataset.json", "w") as file:
-    json.dump(nonFederatedDataset, file, indent=4)
+print(len(nonFederatedDataset))
