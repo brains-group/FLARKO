@@ -534,27 +534,36 @@ def generate_kto_data(
     return [createDatapoint(goodAssets, True), createDatapoint(badAssets, False)]
 
 
-ktoDataset = [[] for _ in range(len(clients))]
+def createKTODataset():
+    ktoDataset = [[] for _ in range(len(clients))]
 
-trainDateLimit = pd.to_datetime("2021-12-1") - timedelta(days=180)
-startTrainDate = pd.to_datetime("2019-08-1")
-for clientIndex, client in enumerate(tqdm(clients)):
-    for currDate in tqdm(
-        pd.date_range(trainDateLimit, startTrainDate, freq=timedelta(weeks=-4))
-    ):
-        for graph in tqdm(client):
-            ktoDataset[clientIndex].extend(
-                generate_kto_data(
-                    graph,
-                    currDate,
+    trainDateLimit = pd.to_datetime("2021-12-1") - timedelta(days=180)
+    startTrainDate = pd.to_datetime("2019-08-1")
+    for clientIndex, client in enumerate(tqdm(clients)):
+        for currDate in tqdm(
+            pd.date_range(trainDateLimit, startTrainDate, freq=timedelta(weeks=-4))
+        ):
+            for graph in tqdm(client):
+                ktoDataset[clientIndex].extend(
+                    generate_kto_data(
+                        graph,
+                        currDate,
+                    )
                 )
-            )
+    return ktoDataset
 
-with open("finDataset.json", "w") as file:
-    json.dump(ktoDataset, file, indent=4)
+
+ktoDatasetPath = "./finDataset.json"
+if not os.path.exists(ktoDatasetPath):
+    ktoDataset = createKTODataset()
+    with open(ktoDatasetPath, "w") as file:
+        json.dump(file, file, indent=4)
+else:
+    with open(ktoDatasetPath, "r") as file:
+        ktoDataset = json.load(file)
 
 nonFederatedDataset = []
-for client in ktoDataset.values():
+for client in ktoDataset:
     nonFederatedDataset.extend(client)
 
 with open("nonFedFinDataset.json", "w") as file:
