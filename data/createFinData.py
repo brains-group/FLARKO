@@ -565,8 +565,8 @@ def getSubgraphsUntilDateStrings(
     backgroundSubGraph = getBackgroundSubgraphUntilDate(
         backgroundGraph, endDate, len(transactionSubGraph)
     )
-    print("len(transactionSubGraph): " + str(len(transactionSubGraph)))
-    print("len(backgroundSubGraph): " + str(len(backgroundSubGraph)))
+    # print("len(transactionSubGraph): " + str(len(transactionSubGraph)))
+    # print("len(backgroundSubGraph): " + str(len(backgroundSubGraph)))
     return transactionSubGraph.serialize(
         format="json-ld", context=transactionContext, indent=None
     ), backgroundSubGraph.serialize(
