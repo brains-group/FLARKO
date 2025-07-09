@@ -33,7 +33,7 @@ if args.dataset_name is not None:
 print_config(cfg)
 
 with open(cfg.dataset.path.format(cfg.dataset.name), "r") as file:
-    dataset = Dataset.from_list(json.load(file)[:10])
+    dataset = Dataset.from_list(json.load(file))
 
 # ===== Define the tokenizer =====
 tokenizer = AutoTokenizer.from_pretrained(
