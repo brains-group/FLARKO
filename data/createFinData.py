@@ -10,13 +10,16 @@ from itertools import chain
 import os
 import json
 
-# from transformers import AutoTokenizer
+from transformers import AutoTokenizer
 
 np.random.seed(2025)
 
 # Define your namespaces
 SECURITY_PREFIX = "http://securityTrade.com/"
 USER_PREFIX = SECURITY_PREFIX + "users/"
+TRANSACTIONS_PREFIX = SECURITY_PREFIX + "transactions/"
+PRICE_PREFIX = SECURITY_PREFIX + "prices/"
+SUMMARY_PREFIX = SECURITY_PREFIX + "summary/"
 ISIN_PREFIX = "urn:isin:"
 SECURITY = Namespace(SECURITY_PREFIX + "ns#")
 SCHEMA = Namespace("http://schema.org/")
@@ -26,6 +29,11 @@ SCHEMA = Namespace("http://schema.org/")
 transactionContext = {
     "@vocab": str(SECURITY),
     "schema": str(SCHEMA),
+    "transactions:": TRANSACTIONS_PREFIX,
+    "users:": USER_PREFIX,
+    # "prices:": PRICE_PREFIX,
+    "summary:": SUMMARY_PREFIX,
+    "isin:": ISIN_PREFIX,
     "xsd": str(XSD),
     "transactionValue": {"@type": "xsd:decimal"},
     # Define the datatype for your date predicate
@@ -106,9 +114,7 @@ def createClients():
             userURI = handleUser(g, transaction["customerID"])
             securityURI = handleSecurity(g, transaction["ISIN"])
 
-            transactionURI = URIRef(
-                SECURITY_PREFIX + "transactions/" + str(transactionID)
-            )
+            transactionURI = URIRef(TRANSACTIONS_PREFIX + str(transactionID))
             g.add(
                 (
                     transactionURI,
@@ -220,6 +226,7 @@ backgroundContext = {
 }
 
 closePricesDF = pd.read_csv("./FAR-Trans/close_prices.csv")
+closePricesDF["timestamp"] = pd.to_datetime(closePricesDF["timestamp"])
 
 
 def createBackgroundGraph():
@@ -240,22 +247,22 @@ def createBackgroundGraph():
             backgroundGraph.add((securityURI, RDF.type, SECURITY.Security))
             backgroundGraph.add((securityURI, SCHEMA.identifier, Literal(isin)))
 
-            if pd.notna(row.get("assetName")):
-                backgroundGraph.add(
-                    (securityURI, SCHEMA.name, Literal(row["assetName"]))
-                )
+            # if pd.notna(row.get("assetName")):
+            #     backgroundGraph.add(
+            #         (securityURI, SCHEMA.name, Literal(row["assetName"]))
+            #     )
             if pd.notna(row.get("assetCategory")):
                 backgroundGraph.add(
                     (securityURI, SECURITY.assetCategory, Literal(row["assetCategory"]))
                 )
-            if pd.notna(row.get("assetSubCategory")):
-                backgroundGraph.add(
-                    (
-                        securityURI,
-                        SECURITY.assetSubCategory,
-                        Literal(row["assetSubCategory"]),
-                    )
-                )
+            # if pd.notna(row.get("assetSubCategory")):
+            #     backgroundGraph.add(
+            #         (
+            #             securityURI,
+            #             SECURITY.assetSubCategory,
+            #             Literal(row["assetSubCategory"]),
+            #         )
+            #     )
             if pd.notna(row.get("sector")):
                 backgroundGraph.add(
                     (securityURI, SCHEMA.sector, Literal(row["sector"]))
@@ -265,31 +272,99 @@ def createBackgroundGraph():
                     (securityURI, SCHEMA.industry, Literal(row["industry"]))
                 )
 
-    for index, row in tqdm(closePricesDF.iterrows()):
-        isin = row["ISIN"]
-        timestamp = row["timestamp"]
-        closePrice = row["closePrice"]
+    for isin, group in tqdm(closePricesDF.groupby("ISIN")):
+        # Set the date as the index for resampling
+        group = group.set_index("timestamp").sort_index()
 
-        if pd.notna(isin) and pd.notna(timestamp) and pd.notna(closePrice):
-            securityURI = URIRef(f"urn:isin:{isin}")
+        # Resample the data into 10-week periods ('10W')
+        # .agg() lets us calculate multiple statistics at once
+        summaries = (
+            group["closePrice"]
+            .resample("10W")
+            .agg(
+                {
+                    "end_price": "last",  # The last price in the period
+                    "avg_price": "mean",  # The average price
+                    "high_price": "max",  # The highest price
+                    "low_price": "min",  # The lowest price
+                }
+            )
+        )
 
-            # Create a unique URI for each price observation
-            priceURI = URIRef(f"http://example.com/prices/{isin}_{timestamp}")
+        # Drop any periods that have no data
+        summaries.dropna(inplace=True)
 
-            # Add the price observation data
-            backgroundGraph.add((priceURI, RDF.type, SECURITY.PriceObservation))
-            backgroundGraph.add((priceURI, SECURITY.priceOf, securityURI))
+        securityURI = URIRef(f"{ISIN_PREFIX}{isin}")
+
+        # Add each summary period to the knowledge graph
+        for end_date, summary in tqdm(summaries.iterrows(), leave=False):
+            period_date_str = end_date.strftime("%Y-%m-%d")
+            summaryURI = URIRef(f"{SUMMARY_PREFIX}{isin}_{period_date_str}")
+
+            backgroundGraph.add((summaryURI, RDF.type, SECURITY.TenWeekPriceSummary))
+            backgroundGraph.add((summaryURI, SECURITY.priceOf, securityURI))
             backgroundGraph.add(
-                (priceURI, SCHEMA.price, Literal(closePrice, datatype=XSD.decimal))
+                (
+                    summaryURI,
+                    SECURITY.periodEndDate,
+                    Literal(period_date_str, datatype=XSD.date),
+                )
+            )
+
+            backgroundGraph.add(
+                (
+                    summaryURI,
+                    SECURITY.periodEndPrice,
+                    Literal(summary["end_price"], datatype=XSD.decimal),
+                )
             )
             backgroundGraph.add(
-                (priceURI, SCHEMA.datePublished, Literal(timestamp, datatype=XSD.date))
+                (
+                    summaryURI,
+                    SECURITY.periodAveragePrice,
+                    Literal(summary["avg_price"], datatype=XSD.decimal),
+                )
             )
+            backgroundGraph.add(
+                (
+                    summaryURI,
+                    SECURITY.periodHighPrice,
+                    Literal(summary["high_price"], datatype=XSD.decimal),
+                )
+            )
+            backgroundGraph.add(
+                (
+                    summaryURI,
+                    SECURITY.periodLowPrice,
+                    Literal(summary["low_price"], datatype=XSD.decimal),
+                )
+            )
+
+    # for index, row in tqdm(closePricesDF.iterrows()):
+    #     isin = row["ISIN"]
+    #     timestamp = row["timestamp"]
+    #     closePrice = row["closePrice"]
+
+    #     if pd.notna(isin) and pd.notna(timestamp) and pd.notna(closePrice):
+    #         securityURI = URIRef(f"{ISIN_PREFIX}{isin}")
+
+    #         # Create a unique URI for each price observation
+    #         priceURI = URIRef(f"{PRICE_PREFIX}{isin}_{timestamp}")
+
+    #         # Add the price observation data
+    #         backgroundGraph.add((priceURI, RDF.type, SECURITY.PriceObservation))
+    #         backgroundGraph.add((priceURI, SECURITY.priceOf, securityURI))
+    #         backgroundGraph.add(
+    #             (priceURI, SCHEMA.price, Literal(closePrice, datatype=XSD.decimal))
+    #         )
+    #         backgroundGraph.add(
+    #             (priceURI, SCHEMA.datePublished, Literal(timestamp, datatype=XSD.date))
+    #         )
 
     # print(
     #     len(
     #         backgroundGraph.serialize(
-    #             format="json-ld", context=backgroundContext, indent=2
+    #             format="json-ld", context=backgroundContext, indent=None
     #         )
     #     )
     # )
@@ -308,10 +383,12 @@ else:
 
 
 # ----------------------------- LLM Input Creation ----------------------------------
-MAX_GRAPH_LENGTH = 500
+MAX_TOTAL_GRAPH_LENGTH = 5000
 
 
-def getBackgroundSubgraphUntilDate(graph: Graph, endDate: datetime) -> Graph:
+def getBackgroundSubgraphUntilDate(
+    graph: Graph, endDate: datetime, usedUpGraphLength: int = 0
+) -> Graph:
     subgraph = Graph()
     subgraph.bind("stock", SECURITY)
     subgraph.bind("schema", SCHEMA)
@@ -320,24 +397,27 @@ def getBackgroundSubgraphUntilDate(graph: Graph, endDate: datetime) -> Graph:
 
     addedSecurities = set()
 
-    datapoints = list(graph[: RDF.type : SECURITY.PriceObservation])
+    datapoints = list(graph[: RDF.type : SECURITY.TenWeekPriceSummary])
 
-    for priceObservation in (
-        random.sample(datapoints, MAX_GRAPH_LENGTH)
-        if len(datapoints) > MAX_GRAPH_LENGTH
-        else datapoints
-    ):
-        priceDate = next(graph[priceObservation : SCHEMA.datePublished :]).toPython()
+    maxLength = MAX_TOTAL_GRAPH_LENGTH - usedUpGraphLength
+    lengthUsed = 0
+    for priceObservation in random.sample(datapoints, len(datapoints)):
+        priceDate = next(graph[priceObservation : SECURITY.periodEndDate :]).toPython()
 
         if priceDate <= endDate.date():
             for s, p, o in graph.triples((priceObservation, None, None)):
                 subgraph.add((s, p, o))
+                lengthUsed += 1
 
             securityURI = next(graph[priceObservation : SECURITY.priceOf :])
             if securityURI not in addedSecurities:
                 for s, p, o in graph.triples((securityURI, None, None)):
                     subgraph.add((s, p, o))
+                    lengthUsed += 1
                 addedSecurities.add(securityURI)
+
+            if maxLength < lengthUsed:
+                break
 
     return subgraph
 
@@ -346,13 +426,15 @@ def getBackgroundSubgraphUntilDate(graph: Graph, endDate: datetime) -> Graph:
 # print(
 #     len(
 #         getBackgroundSubgraphUntilDate(backgroundGraph, "2018-06-01").serialize(
-#             format="json-ld", context=backgroundContext, indent=2
+#             format="json-ld", context=backgroundContext, indent=None
 #         )
 #     )
 # )
 
 
-def getCustomerSubgraphUntilDate(graph: Graph, endDate: datetime) -> Graph:
+def getCustomerSubgraphUntilDate(
+    graph: Graph, endDate: datetime, usedUpGraphLength: int = 0
+) -> Graph:
     subgraph = Graph()
     subgraph.bind("stock", SECURITY)
     subgraph.bind("schema", SCHEMA)
@@ -368,13 +450,11 @@ def getCustomerSubgraphUntilDate(graph: Graph, endDate: datetime) -> Graph:
         )
     )
 
-    for transactionURI in (
-        random.sample(
-            datapoints,
-            MAX_GRAPH_LENGTH,
-        )
-        if len(datapoints) > MAX_GRAPH_LENGTH
-        else datapoints
+    maxLength = MAX_TOTAL_GRAPH_LENGTH - usedUpGraphLength
+    lengthUsed = 0
+    for transactionURI in random.sample(
+        datapoints,
+        len(datapoints),
     ):
         priceDate = next(
             graph[transactionURI : SECURITY.transactionTimestamp :]
@@ -383,16 +463,21 @@ def getCustomerSubgraphUntilDate(graph: Graph, endDate: datetime) -> Graph:
         if priceDate <= endDate.date():
             for s, p, o in graph.triples((transactionURI, None, None)):
                 subgraph.add((s, p, o))
+                lengthUsed += 1
 
             def addEntity(relation):
+                nonlocal lengthUsed
                 entity = next(graph[transactionURI:relation:])
                 if entity not in addedEntities:
                     for s, p, o in graph.triples((entity, None, None)):
                         subgraph.add((s, p, o))
+                        lengthUsed += 1
                     addedEntities.add(entity)
 
             addEntity(SECURITY.involvesSecurity)
             addEntity(SECURITY.hasParticipant)
+            if maxLength <= lengthUsed:
+                break
 
     return subgraph
 
@@ -406,7 +491,7 @@ def getCustomerSubgraphUntilDate(graph: Graph, endDate: datetime) -> Graph:
 # print(
 #     len(
 #         getCustomerSubgraphUntilDate(clients[4][10], "2018-06-01").serialize(
-#             format="json-ld", context=transactionContext, indent=2
+#             format="json-ld", context=transactionContext, indent=None
 #         )
 #     )
 # )
@@ -434,7 +519,6 @@ USER_PROMPT = """Considering all the provided data, and assuming the current dat
 # backgroundSubgraphStrings = {}
 
 allAssets = set(closePricesDF["ISIN"].unique())
-closePricesDF["timestamp"] = pd.to_datetime(closePricesDF["timestamp"])
 closePricesDF.set_index(["ISIN", "timestamp"], inplace=True)
 closePricesDF.sort_index(inplace=True)
 
@@ -444,27 +528,49 @@ transactionsDF.set_index(["customerID", "timestamp"], inplace=True)
 transactionsDF.sort_index(inplace=True)
 
 
-def getCustomerSubgraphUntilDateString(graph: Graph, endDate: datetime):
-    # global customerSubgraphStrings
-    # if endDate not in customerSubgraphStrings:
-    #     customerSubgraphStrings[endDate] = getCustomerSubgraphUntilDate(
-    #         graph, endDate
-    #     ).serialize(format="json-ld", context=transactionContext, indent=2)
-    # return customerSubgraphStrings[endDate]
-    return getCustomerSubgraphUntilDate(graph, endDate).serialize(
-        format="json-ld", context=transactionContext, indent=2
+# def getCustomerSubgraphUntilDateString(
+#     graph: Graph, endDate: datetime, usedUpGraphLength: int = 0
+# ):
+#     # global customerSubgraphStrings
+#     # if endDate not in customerSubgraphStrings:
+#     #     customerSubgraphStrings[endDate] = getCustomerSubgraphUntilDate(
+#     #         graph, endDate
+#     #     ).serialize(format="json-ld", context=transactionContext, indent=None)
+#     # return customerSubgraphStrings[endDate]
+#     return getCustomerSubgraphUntilDate(graph, endDate, usedUpGraphLength).serialize(
+#         format="json-ld", context=transactionContext, indent=None
+#     )
+
+
+# def getBackgroundSubgraphUntilDateString(
+#     graph: Graph, endDate: datetime, usedUpGraphLength: int = 0
+# ):
+#     # global backgroundSubgraphStrings
+#     # if endDate not in backgroundSubgraphStrings:
+#     #     backgroundSubgraphStrings[endDate] = getBackgroundSubgraphUntilDate(
+#     #         graph, endDate
+#     #     ).serialize(format="json-ld", context=backgroundContext, indent=None)
+#     # return backgroundSubgraphStrings[endDate]
+#     return getBackgroundSubgraphUntilDate(graph, endDate, usedUpGraphLength).serialize(
+#         format="json-ld", context=backgroundContext, indent=None
+#     )
+
+
+def getSubgraphsUntilDateStrings(
+    transactionGraph: Graph, backgroundGraph: Graph, endDate: datetime
+):
+    transactionSubGraph = getCustomerSubgraphUntilDate(
+        transactionGraph, endDate, MAX_TOTAL_GRAPH_LENGTH * 0.8
     )
-
-
-def getBackgroundSubgraphUntilDateString(graph: Graph, endDate: datetime):
-    # global backgroundSubgraphStrings
-    # if endDate not in backgroundSubgraphStrings:
-    #     backgroundSubgraphStrings[endDate] = getBackgroundSubgraphUntilDate(
-    #         graph, endDate
-    #     ).serialize(format="json-ld", context=backgroundContext, indent=2)
-    # return backgroundSubgraphStrings[endDate]
-    return getBackgroundSubgraphUntilDate(graph, endDate).serialize(
-        format="json-ld", context=backgroundContext, indent=2
+    backgroundSubGraph = getBackgroundSubgraphUntilDate(
+        backgroundGraph, endDate, len(transactionSubGraph)
+    )
+    print("len(transactionSubGraph): " + str(len(transactionSubGraph)))
+    print("len(backgroundSubGraph): " + str(len(backgroundSubGraph)))
+    return transactionSubGraph.serialize(
+        format="json-ld", context=transactionContext, indent=None
+    ), backgroundSubGraph.serialize(
+        format="json-ld", context=backgroundContext, indent=None
     )
 
 
@@ -535,18 +641,17 @@ def generate_kto_data(
     # prompt_background_kg = get_subgraph_until_date(...)
     # prompt_user_kg = get_transactions_subgraph_until_date(...)
 
+    transactionSubGraph, backgroundSubGraph = getSubgraphsUntilDateStrings(
+        transactionGraph, backgroundGraph, currDate
+    )
     prompt = [
         {"content": SYSTEM_PROMPT_TASK, "role": "system"},
         {
-            "content": SYSTEM_PROMPT_BACKGROUND.format(
-                getBackgroundSubgraphUntilDateString(backgroundGraph, currDate)
-            ),
+            "content": SYSTEM_PROMPT_BACKGROUND.format(backgroundSubGraph),
             "role": "system",
         },
         {
-            "content": SYSTEM_PROMPT_TRANSACTION.format(
-                getCustomerSubgraphUntilDateString(transactionGraph, currDate)
-            ),
+            "content": SYSTEM_PROMPT_TRANSACTION.format(transactionSubGraph),
             "role": "system",
         },
         {"content": USER_PROMPT.format(currDate.date()), "role": "user"},
@@ -592,29 +697,23 @@ def createKTODataset():
 #     use_fast=False,
 #     # padding_side=cfg.train.padding_side,
 # )
-# tokenizer(
-#     getBackgroundSubgraphUntilDateString(backgroundGraph, pd.to_datetime("2021-12-1"))
-# )
 # test = clients[0][0]
 # for client in clients:
 #     for graph in client:
 #         if len(graph) > len(test):
 #             test = graph
+# transactionSubGraph, backgroundSubGraph = getSubgraphsUntilDateStrings(
+#     test, backgroundGraph, pd.to_datetime("2021-12-1")
+# )
 # text = tokenizer.apply_chat_template(
 #     [
 #         {"content": SYSTEM_PROMPT_TASK, "role": "system"},
 #         {
-#             "content": SYSTEM_PROMPT_BACKGROUND.format(
-#                 getBackgroundSubgraphUntilDateString(
-#                     backgroundGraph, pd.to_datetime("2021-12-1")
-#                 )
-#             ),
+#             "content": SYSTEM_PROMPT_BACKGROUND.format(backgroundSubGraph),
 #             "role": "system",
 #         },
 #         {
-#             "content": SYSTEM_PROMPT_TRANSACTION.format(
-#                 getCustomerSubgraphUntilDateString(test, pd.to_datetime("2021-12-1"))
-#             ),
+#             "content": SYSTEM_PROMPT_TRANSACTION.format(transactionSubGraph),
 #             "role": "system",
 #         },
 #         {

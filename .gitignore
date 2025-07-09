@@ -9,3 +9,4 @@ pyEnv.sh
 *.out
 *.sh
 wandb/
+backup/
