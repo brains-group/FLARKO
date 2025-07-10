@@ -80,7 +80,7 @@ def createClients():
     }
 
     clients = [[] for _ in range(20)]
-    biases = np.ones_like(
+    biases = np.ones(
         (
             len(CUSTOMER_BIAS_COLUMNS),
             max(len(unique) for unique in uniqueCustomerTraits.values()),

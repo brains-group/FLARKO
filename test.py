@@ -52,7 +52,25 @@ if args.lora_path is not None:
 tokenizer = AutoTokenizer.from_pretrained(args.base_model_path, use_fast=False)
 
 
-def runTests(dataset):
+def runTests(dataset, goalName="completion", ignoreData="", name=None):
+    if name is None:
+        name = (
+            args.base_model_path
+            + "_"
+            + args.lora_path.replace("/", "-")
+            + "_"
+            + args.data
+            + "_ignore"
+            + ignoreData
+        )
+    responses = {}
+    responsesPath = "responses/" + name + ".json"
+    saveResponses = True
+    if os.path.exists(responsesPath):
+        with open(responsesPath, "r") as file:
+            responses = json.load(file)
+        saveResponses = False
+
     truePositives = defaultdict(lambda: 0)
     falsePositives = defaultdict(lambda: 0)
     falseNegatives = defaultdict(lambda: 0)
@@ -60,38 +78,54 @@ def runTests(dataset):
     mrr = defaultdict(lambda: 0)
     numDatapoints = 0
     for date, data in tqdm(dataset.items()):
-        for dataPoint in tqdm(data, leave=False):
-            if "gemma" in args.base_model_path:
-                dataPoint["prompt"] = [
-                    {
-                        "content": "\n".join(
-                            [turn["content"] for turn in dataPoint["prompt"]]
-                        ),
-                        "role": "user",
-                    }
+        if saveResponses:
+            responses.append([])
+        for index, dataPoint in enumerate(tqdm(data, leave=False)):
+            if saveResponses:
+                if "Background" in ignoreData:
+                    dataPoint["prompt"][1][
+                        "content"
+                    ] = "Here is the supplementary knowledge graph with asset information and historical prices in JSON-LD format:\n\n```jsonld\nEmpty\n```"
+                if "Transaction" in ignoreData:
+                    dataPoint["prompt"][1][
+                        "content"
+                    ] = "Here is the user's transaction history in JSON-LD format:\n\n```jsonld\nEmpty\n```"
+                if "gemma" in args.base_model_path:
+                    dataPoint["prompt"] = [
+                        {
+                            "content": "\n".join(
+                                [turn["content"] for turn in dataPoint["prompt"]]
+                            ),
+                            "role": "user",
+                        }
+                    ]
+
+                text = tokenizer.apply_chat_template(
+                    dataPoint["prompt"], tokenize=False, add_generation_prompt=True
+                )
+
+                print(f"---------------- PROMPT --------------\n{text}")
+
+                model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
+
+                generated_ids = model.generate(**model_inputs, max_new_tokens=4096)
+                generated_ids = [
+                    output_ids[len(input_ids) :]
+                    for input_ids, output_ids in zip(
+                        model_inputs.input_ids, generated_ids
+                    )
                 ]
 
-            text = tokenizer.apply_chat_template(
-                dataPoint["prompt"], tokenize=False, add_generation_prompt=True
-            )
+                response = tokenizer.batch_decode(
+                    generated_ids, skip_special_tokens=True
+                )[0]
 
-            print(f"---------------- PROMPT --------------\n{text}")
-
-            model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
-
-            generated_ids = model.generate(**model_inputs, max_new_tokens=4096)
-            generated_ids = [
-                output_ids[len(input_ids) :]
-                for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
-            ]
-
-            response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[
-                0
-            ]
-
+                responses[date].append(response)
+            else:
+                response = responses[date][index]
             print(f"---------------- RESPONSE --------------\n{response}")
 
-            goals = dataPoint["completion"]
+            goals = dataPoint[goalName]
             print(f"---------------- GOALS --------------\n{goals}")
 
             recommendations = re.findall("(?=\n-([^\n]+))", response)
@@ -163,6 +197,9 @@ def runTests(dataset):
         )
         numDatapoints += numDatePoints
 
+    with open(responsesPath, "w") as file:
+        json.dump(responses, file)
+
     def getSumOfDictVals(dictionary):
         return sum(dictionary.values())
 
@@ -204,5 +241,36 @@ def runTests(dataset):
 
 if args.data == "fin":
     with open("./data/testDataset.json", "r") as file:
-        print("Performing Test:")
-        print(f"Scores: {runTests(json.load(file))}")
+        testDataset = json.load(file)
+        print("Performing Hybrid Test:")
+        print("Performing Overall Test:")
+        print(f"Scores: {runTests(testDataset, "completion")}")
+        print("Performing Profit Test:")
+        print(f"Scores: {runTests(testDataset, "futurePurchases")}")
+        print("Performing Adherence Test:")
+        print(f"Scores: {runTests(testDataset, "profitableAssets")}")
+        print("Performing no Background Test:")
+        print("Performing Overall Test:")
+        print(f"Scores: {runTests(testDataset, "completion", "Background")}")
+        print("Performing Profit Test:")
+        print(f"Scores: {runTests(testDataset, "futurePurchases", "Background")}")
+        print("Performing Adherence Test:")
+        print(f"Scores: {runTests(testDataset, "profitableAssets", "Background")}")
+        print("Performing no Transaction Test:")
+        print("Performing Overall Test:")
+        print(f"Scores: {runTests(testDataset, "completion", "Transaction")}")
+        print("Performing Profit Test:")
+        print(f"Scores: {runTests(testDataset, "futurePurchases", "Transaction")}")
+        print("Performing Adherence Test:")
+        print(f"Scores: {runTests(testDataset, "profitableAssets", "Transaction")}")
+        print("Performing no Data Test:")
+        print("Performing Overall Test:")
+        print(f"Scores: {runTests(testDataset, "completion", "BackgroundTransaction")}")
+        print("Performing Profit Test:")
+        print(
+            f"Scores: {runTests(testDataset, "futurePurchases", "BackgroundTransaction")}"
+        )
+        print("Performing Adherence Test:")
+        print(
+            f"Scores: {runTests(testDataset, "profitableAssets", "BackgroundTransaction")}"
+        )
