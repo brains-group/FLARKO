@@ -13,6 +13,7 @@ import json
 from transformers import AutoTokenizer
 
 np.random.seed(2025)
+random.seed(2025)
 
 # Define your namespaces
 SECURITY_PREFIX = "http://securityTrade.com/"
