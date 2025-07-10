@@ -18,7 +18,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 parser = argparse.ArgumentParser()
 parser.add_argument("--base_model_path", type=str, default="Qwen/Qwen3-0.6B")
 parser.add_argument("--lora_path", type=str, default=None)
-parser.add_argument("--data", type=str, default="movie")
+parser.add_argument("--data", type=str, default="fin")
 args = parser.parse_args()
 print(args)
 
@@ -122,15 +122,7 @@ def runTests(dataset):
     return f"\n Number of Tests: {numDatapoints}\nPrecision: {truePositives/(truePositives+falsePositives)}\nRecall: {truePositives/(truePositives+falseNegatives)}\nMRR: {mrr/numDatapoints}\n{"\n".join([f"Hits@{index+1}: {hitCount/numDatapoints}" for index, hitCount in enumerate(hits)])})"
 
 
-if args.data == "movie":
-    with open("./data/movieKnowledgeGraphTestDataset.json", "r") as file:
-        print("Performing Real Data Test:")
-        print(f"Real Data Scores: {runTests(json.load(file))}")
-
-    # with open("./data/movieKnowledgeGraphSyntheticTestDataset.json", "r") as file:
-    #     print("Performing Synthetic Data Test:")
-    #     print(f"Synthetic Data Scores: {runTests(json.load(file))}")
-elif args.data == "fbk":
-    with open("./data/FB15k-237/testFB15k-237.json", "r") as file:
-        print("Performing FB15k-237 Test:")
-        print(f"FB15k-237 Scores: {runTests(json.load(file))}")
+if args.data == "fin":
+    with open("./data/testDataset.json", "r") as file:
+        print("Performing Test:")
+        print(f"Scores: {runTests(json.load(file))}")

@@ -673,7 +673,7 @@ def generate_kto_data(
     return [createDatapoint(goodAssets, True), createDatapoint(badAssets, False)]
 
 
-def createKTODataset():
+def createTestDataset():
     ktoDataset = [[] for _ in range(len(clients))]
 
     trainDateLimit = pd.to_datetime("2021-12-1") - timedelta(days=180)
@@ -732,7 +732,7 @@ def createKTODataset():
 
 ktoDatasetPath = "./finDataset.json"
 if not os.path.exists(ktoDatasetPath):
-    ktoDataset = createKTODataset()
+    ktoDataset = createTestDataset()
     with open(ktoDatasetPath, "w") as file:
         json.dump(ktoDataset, file, indent=4)
 else:
@@ -751,3 +751,120 @@ else:
         nonFederatedDataset = json.load(file)
 
 print(len(nonFederatedDataset))
+
+
+# -------------------------------- Create Test Dataset ------------------------------
+
+
+def generate_test_data(
+    transactionGraph: Graph,
+    currDate: datetime,
+    closePricesDF: pd.DataFrame = closePricesDF,
+    transactionsDF: pd.DataFrame = transactionsDF,
+):
+    """
+    Generates KTO training examples for a given user and evaluation date.
+
+    Args:
+        transactionGraph: The transaction graph of the user to generate data for.
+        currDate: The 'current date' for the recommendation in 'YYYY-MM-DD' format.
+        closePricesDF: DataFrame of ALL historical prices.
+        transactionsDF: DataFrame of ALL user transactions.
+
+    Yields:
+        A dictionary for each KTO example containing the prompt and the completion.
+    """
+    # 1. Setup dates
+    futureDate = currDate + timedelta(days=180)
+    customerID = next(transactionGraph[: RDF.type : SECURITY.User])[len(USER_PREFIX) :]
+
+    # 2. Find assets the user ACTUALLY bought in the next 6 months
+    futureTransactions = transactionsDF.query(
+        "customerID == @customerID and \
+        timestamp > @currDate and \
+        timestamp <= @futureDate and \
+        transactionType == 'Buy'"
+    )
+    futurePurchases = set(futureTransactions["ISIN"].unique())
+    if len(futurePurchases) == 0:
+        return []
+
+    # 3. Find assets that were PROFITABLE in the next 6 months
+    goodAssets = set()
+    for isin in futurePurchases:
+        try:
+            startPrice = closePricesDF.query(
+                "ISIN == @isin and timestamp <= @currDate"
+            ).iloc[-1]["closePrice"]
+
+            endPrice = closePricesDF.query(
+                "ISIN == @isin and timestamp > @currDate and timestamp <= @futureDate"
+            ).iloc[-1]["closePrice"]
+
+            if endPrice > startPrice:
+                goodAssets.add(isin)
+        except IndexError:
+            # Not enough price data to determine profitability
+            continue
+    if len(goodAssets) == 0:
+        return []
+
+    # 5. Yield KTO data points
+    # (Here you would generate the filtered KGs for the prompt)
+    # prompt_background_kg = get_subgraph_until_date(...)
+    # prompt_user_kg = get_transactions_subgraph_until_date(...)
+
+    transactionSubGraph, backgroundSubGraph = getSubgraphsUntilDateStrings(
+        transactionGraph, backgroundGraph, currDate
+    )
+    prompt = [
+        {"content": SYSTEM_PROMPT_TASK, "role": "system"},
+        {
+            "content": SYSTEM_PROMPT_BACKGROUND.format(backgroundSubGraph),
+            "role": "system",
+        },
+        {
+            "content": SYSTEM_PROMPT_TRANSACTION.format(transactionSubGraph),
+            "role": "system",
+        },
+        {"content": USER_PROMPT.format(currDate.date()), "role": "user"},
+    ]
+
+    return {
+        "prompt": prompt,
+        "completion": goodAssets,
+    }
+
+
+def createTestDataset():
+    testDateLimit = pd.to_datetime("2022-11-29") - timedelta(days=180)
+    startTestDate = pd.to_datetime("2021-12-1")
+
+    dates = pd.date_range(testDateLimit, startTestDate, freq=timedelta(weeks=-2))
+    testDataset = {date: [] for date in dates}
+
+    for client in tqdm(clients):
+        for currDate in tqdm(
+            dates,
+            leave=False,
+        ):
+            for graph in tqdm(client, leave=False):
+                testDataset[currDate].extend(
+                    generate_test_data(
+                        graph,
+                        currDate,
+                    )
+                )
+    return testDataset
+
+
+testDatasetPath = "./testFinDataset.json"
+if not os.path.exists(testDatasetPath):
+    testDataset = createTestDataset()
+    with open(testDatasetPath, "w") as file:
+        json.dump(testDataset, file, indent=4)
+else:
+    with open(testDatasetPath, "r") as file:
+        testDataset = json.load(file)
+
+print(len(testDataset))
