@@ -34,6 +34,30 @@ print_config(cfg)
 
 with open(cfg.dataset.path.format(cfg.dataset.name), "r") as file:
     dataset = Dataset.from_list(json.load(file))
+    if "gemma" in cfg.model.name:
+
+        def formatGemmaPrompt(example):
+            example["prompt"] = [
+                {
+                    "content": "\n".join(
+                        [turn["content"] for turn in example["prompt"]]
+                    ),
+                    "role": "user",
+                }
+            ]
+            return example
+
+        dataset = dataset.map(formatGemmaPrompt)
+        # for datapoint in dataset:
+        #     datapoint["prompt"] = [
+        #         {
+        #             "content": "\n".join(
+        #                 [turn["content"] for turn in datapoint["prompt"]]
+        #             ),
+        #             "role": "user",
+        #         }
+        #     ]
+        # print(dataset[0])
 
 # ===== Define the tokenizer =====
 tokenizer = AutoTokenizer.from_pretrained(

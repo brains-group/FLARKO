@@ -5,7 +5,7 @@ dataset:
   name: "nonFedFinDataset"
 
 model:
-  name: "google/gemma-3-1b-pt"
+  name: "google/gemma-3-1b-it"
   quantization: 4 # 8 or 4 if you want to do quantization with BitsAndBytes
   gradient_checkpointing: True # ! Ensure it matches that in train.train_arguments
   use_fast_tokenizer: False

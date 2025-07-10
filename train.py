@@ -37,6 +37,18 @@ print_config(cfg)
 
 with open(cfg.dataset.path.format(cfg.dataset.name), "r") as file:
     datasets = json.load(file)
+    if "gemma" in cfg.model.name:
+        for dataset in datasets:
+            for datapoint in dataset:
+                datapoint["prompt"] = [
+                    {
+                        "content": "\n\n".join(
+                            [turn["content"] for turn in datapoint["prompt"]]
+                        ),
+                        "role": "user",
+                    }
+                ]
+
 cfg.flower.num_clients = len(datasets)
 print(cfg.flower.num_clients)
 
@@ -74,6 +86,7 @@ client = fl.client.ClientApp(
     ),
     # mods=[fixedclipping_mod] # For Differential Privacy
 )
+
 
 def server_fn(context: Context):
 
