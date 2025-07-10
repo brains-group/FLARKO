@@ -3,6 +3,7 @@ import argparse
 import json
 import sys
 import re
+from collections import defaultdict
 
 sys.path.append("../../")
 sys.path.append("../../../")
@@ -52,74 +53,153 @@ tokenizer = AutoTokenizer.from_pretrained(args.base_model_path, use_fast=False)
 
 
 def runTests(dataset):
-    truePositives = 0
-    falsePositives = 0
-    falseNegatives = 0
-    hits = [0] * 10
-    mrr = 0
-    for dataPoint in tqdm(dataset):
-        text = tokenizer.apply_chat_template(
-            dataPoint["prompt"], tokenize=False, add_generation_prompt=True
-        )
+    truePositives = defaultdict(lambda: 0)
+    falsePositives = defaultdict(lambda: 0)
+    falseNegatives = defaultdict(lambda: 0)
+    hits = defaultdict(lambda: [0] * 10)
+    mrr = defaultdict(lambda: 0)
+    numDatapoints = 0
+    for date, data in tqdm(dataset.items()):
+        for dataPoint in tqdm(data, leave=False):
+            if "gemma" in args.base_model_path:
+                dataPoint["prompt"] = [
+                    {
+                        "content": "\n".join(
+                            [turn["content"] for turn in dataPoint["prompt"]]
+                        ),
+                        "role": "user",
+                    }
+                ]
 
-        print(f"---------------- PROMPT --------------\n{text}")
+            text = tokenizer.apply_chat_template(
+                dataPoint["prompt"], tokenize=False, add_generation_prompt=True
+            )
 
-        model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
+            print(f"---------------- PROMPT --------------\n{text}")
 
-        generated_ids = model.generate(**model_inputs, max_new_tokens=4096)
-        generated_ids = [
-            output_ids[len(input_ids) :]
-            for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
-        ]
+            model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
 
-        response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+            generated_ids = model.generate(**model_inputs, max_new_tokens=4096)
+            generated_ids = [
+                output_ids[len(input_ids) :]
+                for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
+            ]
 
-        print(f"---------------- RESPONSE --------------\n{response}")
+            response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[
+                0
+            ]
 
-        completion = dataPoint["completion"][0]["content"]
-        print(f"---------------- COMPLETION --------------\n{completion}")
+            print(f"---------------- RESPONSE --------------\n{response}")
 
-        recommendations = re.findall("(?=\n-([^\n]+))", response)
-        formatFollowed = len(recommendations) > 0
-        subResponse = response
-        if formatFollowed:
-            subResponse = "".join(recommendations)
-            falsePositives += len(recommendations)
-        rank = -1
-        for goal in dataPoint["goal"]:
-            if goal in subResponse:
-                truePositives += 1
-                print(f"{goal} found in response.")
-                if formatFollowed:
-                    falsePositives -= 1
-                    for recommendationIndex in range(
-                        len(recommendations)
-                        if rank < 0
-                        else min(len(recommendations), rank)
-                    ):
-                        if goal in recommendations[recommendationIndex]:
-                            rank = recommendationIndex
+            goals = dataPoint["completion"]
+            print(f"---------------- GOALS --------------\n{goals}")
+
+            recommendations = re.findall("(?=\n-([^\n]+))", response)
+            formatFollowed = len(recommendations) > 0
+            subResponse = response
+            if formatFollowed:
+                subResponse = "".join(recommendations)
+                falsePositives[date] += len(recommendations)
+            rank = -1
+            for goal in goals:
+                if goal in subResponse:
+                    truePositives[date] += 1
+                    print(f"{goal} found in response.")
+                    if formatFollowed:
+                        falsePositives[date] -= 1
+                        for recommendationIndex in range(
+                            len(recommendations)
+                            if rank < 0
+                            else min(len(recommendations), rank)
+                        ):
+                            if goal in recommendations[recommendationIndex]:
+                                rank = recommendationIndex
+                    else:
+                        rank = 0
+                        falseNegatives[date] += len(goals) - (goals.index(goal) + 1)
+                        break
                 else:
-                    rank = 0
-                    falseNegatives += len(dataPoint["goal"]) - (
-                        dataPoint["goal"].index(goal) + 1
+                    falseNegatives[date] += 1
+                    print(f"{goal} not found in response.")
+            falseNegatives[date] = max(
+                0, min(20 - truePositives[date], falseNegatives[date])
+            )
+            if rank >= 0:
+                mrr[date] += 1 / (rank + 1)
+                if len(hits[date]) < len(recommendations):
+                    hits[date] += [hits[date][-1]] * (
+                        len(recommendations) - len(hits[date])
                     )
-                    break
-            else:
-                falseNegatives += 1
-                print(f"{goal} not found in response.")
-        if rank >= 0:
-            mrr += 1 / (rank + 1)
-            if len(hits) < len(recommendations):
-                hits += [hits[-1]] * (len(recommendations) - len(hits))
-            for i in range(rank, len(hits), 1):
-                hits[i] += 1
-        print(f"truePositives: {truePositives}")
-        print(f"falsePositives: {falsePositives}")
-        print(f"falseNegatives: {falseNegatives}")
-        print(f"Hits@: {hits}")
-    numDatapoints = len(dataset)
-    return f"\n Number of Tests: {numDatapoints}\nPrecision: {truePositives/(truePositives+falsePositives)}\nRecall: {truePositives/(truePositives+falseNegatives)}\nMRR: {mrr/numDatapoints}\n{"\n".join([f"Hits@{index+1}: {hitCount/numDatapoints}" for index, hitCount in enumerate(hits)])})"
+                for i in range(rank, len(hits[date]), 1):
+                    hits[date][i] += 1
+            print(f"truePositives[date]: {truePositives[date]}")
+            print(f"falsePositives[date]: {falsePositives[date]}")
+            print(f"falseNegatives[date]: {falseNegatives[date]}")
+            print(f"Hits@: {hits[date]}")
+        numDatePoints = len(dataset)
+        (
+            "\nFor date: {date}\n"
+            "Number of Tests: {num_tests}\n"
+            "Precision: {precision}\n"
+            "Recall: {recall}\n"
+            "MRR: {mrr}\n"
+            "{hits}"
+        ).format(
+            date=date,
+            num_tests=numDatePoints,
+            precision=truePositives[date]
+            / (truePositives[date] + falsePositives[date]),
+            recall=truePositives[date] / (truePositives[date] + falseNegatives[date]),
+            mrr=mrr[date] / numDatePoints,
+            hits="\n".join(
+                [
+                    "Hits@{}: {}".format(
+                        hitIndex + 1,
+                        hitCount / numDatePoints,
+                    )
+                    for hitIndex, hitCount in hits[date]
+                ]
+            ),
+        )
+        numDatapoints += numDatePoints
+
+    def getSumOfDictVals(dictionary):
+        return sum(dictionary.values())
+
+    return (
+        "\nOverall Stats\n"
+        "Number of Tests: {num_tests}\n"
+        "Precision: {precision}\n"
+        "Recall: {recall}\n"
+        "MRR: {mrr}\n"
+        "{hits}"
+    ).format(
+        num_tests=numDatapoints,
+        precision=getSumOfDictVals(truePositives)
+        / (getSumOfDictVals(truePositives) + getSumOfDictVals(falsePositives)),
+        recall=getSumOfDictVals(truePositives)
+        / (getSumOfDictVals(truePositives) + getSumOfDictVals(falseNegatives)),
+        mrr=getSumOfDictVals(mrr) / numDatapoints,
+        hits="\n".join(
+            [
+                "Hits@{}: {}".format(
+                    hitIndex + 1,
+                    sum(
+                        [
+                            (
+                                hitList[hitIndex]
+                                if hitIndex < len(hitList)
+                                else hitList[-1]
+                            )
+                            for hitList in hits.values()
+                        ]
+                    )
+                    / numDatapoints,
+                )
+                for hitIndex in range(max(len(hitList) for hitList in hits.values()))
+            ]
+        ),
+    )
 
 
 if args.data == "fin":

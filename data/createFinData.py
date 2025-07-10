@@ -790,8 +790,8 @@ def generate_test_data(
         return []
 
     # 3. Find assets that were PROFITABLE in the next 6 months
-    goodAssets = set()
-    for isin in futurePurchases:
+    profitableAssets = set()
+    for isin in transactionsDF["ISIN"].unique():
         try:
             startPrice = closePricesDF.query(
                 "ISIN == @isin and timestamp <= @currDate"
@@ -802,11 +802,11 @@ def generate_test_data(
             ).iloc[-1]["closePrice"]
 
             if endPrice > startPrice:
-                goodAssets.add(isin)
+                profitableAssets.add(isin)
         except IndexError:
             # Not enough price data to determine profitability
             continue
-    if len(goodAssets) == 0:
+    if len(profitableAssets) == 0:
         return []
 
     # 5. Yield KTO data points
@@ -832,7 +832,9 @@ def generate_test_data(
 
     return {
         "prompt": prompt,
-        "completion": goodAssets,
+        "futurePurchases": futurePurchases,
+        "profitableAssets": profitableAssets,
+        "completion": futurePurchases.intersection(profitableAssets),
     }
 
 
