@@ -13,9 +13,6 @@ model:
     peft_lora_r: 16
     peft_lora_alpha: 64
     target_modules: ["q_proj","v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
-  rope_scaling:
-    type: "yarn"
-    factor: 4.0
 
 train:
   save_every_round: 5

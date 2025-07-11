@@ -209,13 +209,21 @@ def get_model(model_cfg: DictConfig):
 
         model_name = model_cfg.name
 
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        quantization_config=quantization_config,
-        torch_dtype=torch.bfloat16,
-        low_cpu_mem_usage=True,
-        rope_scaling=dict(model_cfg.rope_scaling),
-    )
+    if "rope_scaling" in model_cfg:
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            quantization_config=quantization_config,
+            torch_dtype=torch.bfloat16,
+            low_cpu_mem_usage=True,
+            rope_scaling=dict(model_cfg.rope_scaling),
+        )
+    else:
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            quantization_config=quantization_config,
+            torch_dtype=torch.bfloat16,
+            low_cpu_mem_usage=True,
+        )
 
     if use_cuda:
         model = prepare_model_for_kbit_training(

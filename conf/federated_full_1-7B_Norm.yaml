@@ -1,0 +1,54 @@
+# Federated Instruction Tuning on General Dataset
+---
+
+dataset:
+  path: "./data/{}.json"
+  name: "finDatasetNorm"
+
+model:
+  name: "Qwen/Qwen3-1.7B"
+  quantization: 4 # 8 or 4 if you want to do quantization with BitsAndBytes
+  gradient_checkpointing: True
+  use_fast_tokenizer: False
+  lora:
+    peft_lora_r: 16
+    peft_lora_alpha: 64
+    target_modules: ["q_proj","v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+  rope_scaling:
+    rope_type: "yarn"
+    factor: 4.0
+
+train:
+  num_rounds: ${flower.num_rounds}
+  save_every_round: 5
+  learning_rate_max: 5e-5
+  learning_rate_min: 1e-6
+  seq_length: 131072
+  padding_side: "left"
+  evaluate_split: false
+  training_arguments:
+    output_dir: null # to be set by hydra
+    learning_rate: null # to be set by the client
+    per_device_train_batch_size: 16
+    gradient_accumulation_steps: 1
+    logging_steps: 10
+    num_train_epochs: 0.1
+    # max_steps: 10
+    save_steps: 1000
+    save_total_limit: 10
+    gradient_checkpointing: ${model.gradient_checkpointing}
+    lr_scheduler_type: "constant"
+    report_to: null
+    run_name: null
+
+
+flower:
+    num_clients: null # to be set by length of dataset
+    num_rounds: 200
+    sample_clients: 3
+    client_resources:
+      num_cpus: 8
+      num_gpus: 1.0
+    dp:
+      noise_mult: 0.02
+      clip_norm: 0.5
