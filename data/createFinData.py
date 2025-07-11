@@ -756,8 +756,8 @@ print(len(nonFederatedDataset))
 # -------------------------------- Create Test Dataset ------------------------------
 
 closePricesDF.reset_index(inplace=True)
-closePricesDF['timestamp'] = pd.to_datetime(closePricesDF['timestamp'])
-closePricesDF.sort_values(['ISIN', 'timestamp'], inplace=True)
+closePricesDF["timestamp"] = pd.to_datetime(closePricesDF["timestamp"])
+closePricesDF.sort_values(["ISIN", "timestamp"], inplace=True)
 
 
 def generate_test_data(
@@ -792,28 +792,22 @@ def generate_test_data(
     futurePurchases = set(futureTransactions["ISIN"].unique())
     if len(futurePurchases) == 0:
         return []
-    
+
     # print("Data type of 'timestamp' column:", closePricesDF.dtypes)
     # print("Data type of comparison date 'currDate':", type(currDate))
 
     # 4. Get Start Prices using a boolean mask on the sorted columns
     startPricesDF = closePricesDF[closePricesDF["timestamp"] <= currDate]
     startPrices = (
-        startPricesDF.groupby("ISIN")
-        .last()["closePrice"]
-        .rename("startPrice")
+        startPricesDF.groupby("ISIN").last()["closePrice"].rename("startPrice")
     )
 
     # 5. Get End Prices using a boolean mask
     futurePricesDF = closePricesDF[
-        (closePricesDF["timestamp"] > currDate) &
-        (closePricesDF["timestamp"] <= futureDate)
+        (closePricesDF["timestamp"] > currDate)
+        & (closePricesDF["timestamp"] <= futureDate)
     ]
-    endPrices = (
-        futurePricesDF.groupby("ISIN")
-        .last()["closePrice"]
-        .rename("endPrice")
-    )
+    endPrices = futurePricesDF.groupby("ISIN").last()["closePrice"].rename("endPrice")
 
     # 5. Get the final set of ISINs
     profitDF = pd.concat([startPrices, endPrices], axis=1).dropna()
@@ -856,7 +850,7 @@ def createTestDataset():
     startTestDate = pd.to_datetime("2021-12-1")
 
     dates = pd.date_range(testDateLimit, startTestDate, freq=timedelta(weeks=-2))
-    testDataset = {date: [] for date in dates}
+    testDataset = {str(date): [] for date in dates}
 
     for client in tqdm(clients):
         for currDate in tqdm(
@@ -864,7 +858,7 @@ def createTestDataset():
             leave=False,
         ):
             for graph in tqdm(client, leave=False):
-                testDataset[currDate].extend(
+                testDataset[str(currDate)].extend(
                     generate_test_data(
                         graph,
                         currDate,
@@ -876,6 +870,8 @@ def createTestDataset():
 testDatasetPath = "./testFinDataset.json"
 if not os.path.exists(testDatasetPath):
     testDataset = createTestDataset()
+    with open(testDatasetPath[:-5] + ".pkl", "w") as file:
+        pickle.dump(testDataset, file)
     with open(testDatasetPath, "w") as file:
         json.dump(testDataset, file, indent=4)
 else:
