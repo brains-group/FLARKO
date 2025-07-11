@@ -755,6 +755,10 @@ print(len(nonFederatedDataset))
 
 # -------------------------------- Create Test Dataset ------------------------------
 
+closePricesDF.reset_index(inplace=True)
+closePricesDF['timestamp'] = pd.to_datetime(closePricesDF['timestamp'])
+closePricesDF.sort_values(['ISIN', 'timestamp'], inplace=True)
+
 
 def generate_test_data(
     transactionGraph: Graph,
@@ -788,24 +792,33 @@ def generate_test_data(
     futurePurchases = set(futureTransactions["ISIN"].unique())
     if len(futurePurchases) == 0:
         return []
+    
+    # print("Data type of 'timestamp' column:", closePricesDF.dtypes)
+    # print("Data type of comparison date 'currDate':", type(currDate))
 
-    # 3. Find assets that were PROFITABLE in the next 6 months
-    profitableAssets = set()
-    for isin in transactionsDF["ISIN"].unique():
-        try:
-            startPrice = closePricesDF.query(
-                "ISIN == @isin and timestamp <= @currDate"
-            ).iloc[-1]["closePrice"]
+    # 4. Get Start Prices using a boolean mask on the sorted columns
+    startPricesDF = closePricesDF[closePricesDF["timestamp"] <= currDate]
+    startPrices = (
+        startPricesDF.groupby("ISIN")
+        .last()["closePrice"]
+        .rename("startPrice")
+    )
 
-            endPrice = closePricesDF.query(
-                "ISIN == @isin and timestamp > @currDate and timestamp <= @futureDate"
-            ).iloc[-1]["closePrice"]
+    # 5. Get End Prices using a boolean mask
+    futurePricesDF = closePricesDF[
+        (closePricesDF["timestamp"] > currDate) &
+        (closePricesDF["timestamp"] <= futureDate)
+    ]
+    endPrices = (
+        futurePricesDF.groupby("ISIN")
+        .last()["closePrice"]
+        .rename("endPrice")
+    )
 
-            if endPrice > startPrice:
-                profitableAssets.add(isin)
-        except IndexError:
-            # Not enough price data to determine profitability
-            continue
+    # 5. Get the final set of ISINs
+    profitDF = pd.concat([startPrices, endPrices], axis=1).dropna()
+    profitable_assets_series = profitDF[profitDF["endPrice"] > profitDF["startPrice"]]
+    profitableAssets = set(profitable_assets_series.index)
     if len(profitableAssets) == 0:
         return []
 
