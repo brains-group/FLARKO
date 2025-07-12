@@ -858,7 +858,7 @@ def createTestDataset():
             leave=False,
         ):
             for graph in tqdm(client, leave=False):
-                testDataset[str(currDate)].extend(
+                testDataset[str(currDate)].append(
                     generate_test_data(
                         graph,
                         currDate,
@@ -870,7 +870,7 @@ def createTestDataset():
 testDatasetPath = "./testFinDataset.json"
 if not os.path.exists(testDatasetPath):
     testDataset = createTestDataset()
-    with open(testDatasetPath[:-5] + ".pkl", "w") as file:
+    with open(testDatasetPath[:-5] + ".pkl", "wb") as file:
         pickle.dump(testDataset, file)
     with open(testDatasetPath, "w") as file:
         json.dump(testDataset, file, indent=4)
