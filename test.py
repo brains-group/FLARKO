@@ -43,7 +43,9 @@ else:
 # ============= Generate responses =============
 device = "cuda"
 model = AutoModelForCausalLM.from_pretrained(
-    args.base_model_path, torch_dtype=torch.float16
+    args.base_model_path,
+    torch_dtype=torch.float16,
+    rope_scaling={"type": "yarn", "factor": 4.0},
 ).to(device)
 if args.lora_path is not None:
     model = PeftModel.from_pretrained(
@@ -240,7 +242,7 @@ def runTests(dataset, goalName="completion", ignoreData="", name=None):
 
 
 if args.data == "fin":
-    with open("./data/testDataset.json", "r") as file:
+    with open("./data/testFinDatasetSmall.json", "r") as file:
         testDataset = json.load(file)
         print("Performing Hybrid Test:")
         print("Performing Overall Test:")

@@ -837,12 +837,14 @@ def generate_test_data(
         {"content": USER_PROMPT.format(currDate.date()), "role": "user"},
     ]
 
-    return {
-        "prompt": prompt,
-        "futurePurchases": futurePurchases,
-        "profitableAssets": profitableAssets,
-        "completion": futurePurchases.intersection(profitableAssets),
-    }
+    return [
+        {
+            "prompt": prompt,
+            "futurePurchases": list(futurePurchases),
+            "profitableAssets": list(profitableAssets),
+            "completion": list(futurePurchases.intersection(profitableAssets)),
+        }
+    ]
 
 
 def createTestDataset():
@@ -858,7 +860,7 @@ def createTestDataset():
             leave=False,
         ):
             for graph in tqdm(client, leave=False):
-                testDataset[str(currDate)].append(
+                testDataset[str(currDate)].extend(
                     generate_test_data(
                         graph,
                         currDate,
@@ -869,9 +871,30 @@ def createTestDataset():
 
 testDatasetPath = "./testFinDataset.json"
 if not os.path.exists(testDatasetPath):
-    testDataset = createTestDataset()
-    with open(testDatasetPath[:-5] + ".pkl", "wb") as file:
-        pickle.dump(testDataset, file)
+    picklePath = testDatasetPath[:-5] + ".pkl"
+    if os.path.exists(picklePath):
+        with open(picklePath, "rb") as file:
+            testDataset = pickle.load(file)
+
+        # # Fixing mistake with dataset
+        # def fixDatapoint(datapoint):
+        #     datapoint["futurePurchases"] = list(datapoint["futurePurchases"])
+        #     datapoint["profitableAssets"] = list(datapoint["profitableAssets"])
+        #     datapoint["completion"] = list(datapoint["completion"])
+        #     return datapoint
+
+        # testDataset = {
+        #     date: [
+        #         fixDatapoint(datapoint)
+        #         for datapoint in dateData
+        #         if (not (datapoint == []))
+        #     ]
+        #     for date, dateData in testDataset.items()
+        # }
+    else:
+        testDataset = createTestDataset()
+        with open(picklePath, "wb") as file:
+            pickle.dump(testDataset, file)
     with open(testDatasetPath, "w") as file:
         json.dump(testDataset, file, indent=4)
 else:
@@ -879,3 +902,21 @@ else:
         testDataset = json.load(file)
 
 print(len(testDataset))
+for dateData in testDataset.values():
+    print(len(dateData))
+
+smallTestDatasetPath = "./testFinDatasetSmall.json"
+if not os.path.exists(smallTestDatasetPath):
+    smallTestDataset = {
+        date: random.sample(dateData, int(len(dateData) * 0.08))
+        for date, dateData in testDataset.items()
+    }
+    with open(smallTestDatasetPath, "w") as file:
+        json.dump(smallTestDataset, file, indent=4)
+else:
+    with open(smallTestDatasetPath, "r") as file:
+        smallTestDataset = json.load(file)
+
+print(len(smallTestDataset))
+for dateData in smallTestDataset.values():
+    print(len(dateData))
