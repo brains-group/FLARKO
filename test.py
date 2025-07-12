@@ -72,6 +72,10 @@ def runTests(dataset, goalName="completion", ignoreData="", name=None):
         with open(responsesPath, "r") as file:
             responses = json.load(file)
         saveResponses = False
+    else:
+        responsesFolder = responsesPath[: responsesPath.rfind("/")]
+        if not os.path.exists(responsesFolder):
+            os.makedirs(responsesFolder)
 
     truePositives = defaultdict(lambda: 0)
     falsePositives = defaultdict(lambda: 0)
@@ -82,7 +86,7 @@ def runTests(dataset, goalName="completion", ignoreData="", name=None):
     for date, data in tqdm(dataset.items()):
         if saveResponses:
             responses[str(date)] = []
-        for index, dataPoint in enumerate(tqdm(data[:2], leave=False)):
+        for index, dataPoint in enumerate(tqdm(data, leave=False)):
             if saveResponses:
                 if "Background" in ignoreData:
                     dataPoint["prompt"][1][
@@ -199,8 +203,9 @@ def runTests(dataset, goalName="completion", ignoreData="", name=None):
         )
         numDatapoints += numDatePoints
 
-    with open(responsesPath, "w") as file:
-        json.dump(responses, file)
+    if saveResponses:
+        with open(responsesPath, "w") as file:
+            json.dump(responses, file)
 
     def getSumOfDictVals(dictionary):
         return sum(dictionary.values())
