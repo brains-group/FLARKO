@@ -81,7 +81,7 @@ def runTests(dataset, goalName="completion", ignoreData="", name=None):
     numDatapoints = 0
     for date, data in tqdm(dataset.items()):
         if saveResponses:
-            responses.append([])
+            responses[str(date)].append([])
         for index, dataPoint in enumerate(tqdm(data, leave=False)):
             if saveResponses:
                 if "Background" in ignoreData:
@@ -122,9 +122,9 @@ def runTests(dataset, goalName="completion", ignoreData="", name=None):
                     generated_ids, skip_special_tokens=True
                 )[0]
 
-                responses[date].append(response)
+                responses[str(date)].append(response)
             else:
-                response = responses[date][index]
+                response = responses[str(date)][index]
             print(f"---------------- RESPONSE --------------\n{response}")
 
             goals = dataPoint[goalName]
