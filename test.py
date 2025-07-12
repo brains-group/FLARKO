@@ -82,7 +82,7 @@ def runTests(dataset, goalName="completion", ignoreData="", name=None):
     for date, data in tqdm(dataset.items()):
         if saveResponses:
             responses[str(date)] = []
-        for index, dataPoint in enumerate(tqdm(data, leave=False)):
+        for index, dataPoint in enumerate(tqdm(data[:2], leave=False)):
             if saveResponses:
                 if "Background" in ignoreData:
                     dataPoint["prompt"][1][
@@ -193,7 +193,7 @@ def runTests(dataset, goalName="completion", ignoreData="", name=None):
                         hitIndex + 1,
                         hitCount / numDatePoints,
                     )
-                    for hitIndex, hitCount in hits[date]
+                    for hitIndex, hitCount in enumerate(hits[date])
                 ]
             ),
         )

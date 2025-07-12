@@ -816,10 +816,9 @@ def generate_test_data(
     if len(profitableAssets) == 0:
         return []
 
-    # 5. Yield KTO data points
-    # (Here you would generate the filtered KGs for the prompt)
-    # prompt_background_kg = get_subgraph_until_date(...)
-    # prompt_user_kg = get_transactions_subgraph_until_date(...)
+    goodAssets = futurePurchases.intersection(profitableAssets)
+    if len(goodAssets) == 0:
+        return []
 
     transactionSubGraph, backgroundSubGraph = getSubgraphsUntilDateStrings(
         transactionGraph, backgroundGraph, currDate
@@ -842,7 +841,7 @@ def generate_test_data(
             "prompt": prompt,
             "futurePurchases": list(futurePurchases),
             "profitableAssets": list(profitableAssets),
-            "completion": list(futurePurchases.intersection(profitableAssets)),
+            "completion": list(goodAssets),
         }
     ]
 
@@ -887,7 +886,7 @@ if not os.path.exists(testDatasetPath):
         #     date: [
         #         fixDatapoint(datapoint)
         #         for datapoint in dateData
-        #         if (not (datapoint == []))
+        #         if (not (datapoint == [] or len(datapoint["completion"]) == 0))
         #     ]
         #     for date, dateData in testDataset.items()
         # }
@@ -908,7 +907,7 @@ for dateData in testDataset.values():
 smallTestDatasetPath = "./testFinDatasetSmall.json"
 if not os.path.exists(smallTestDatasetPath):
     smallTestDataset = {
-        date: random.sample(dateData, int(len(dateData) * 0.08))
+        date: random.sample(dateData, int(len(dateData) * 0.15))
         for date, dateData in testDataset.items()
     }
     with open(smallTestDatasetPath, "w") as file:
