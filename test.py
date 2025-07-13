@@ -110,7 +110,7 @@ def runTests(dataset, goalName="completion", ignoreData="", name=None):
                     dataPoint["prompt"], tokenize=False, add_generation_prompt=True
                 )
 
-                print(f"---------------- PROMPT --------------\n{text}")
+                # print(f"---------------- PROMPT --------------\n{text}")
 
                 model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
 

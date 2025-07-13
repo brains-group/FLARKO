@@ -907,7 +907,7 @@ for dateData in testDataset.values():
 smallTestDatasetPath = "./testFinDatasetSmall.json"
 if not os.path.exists(smallTestDatasetPath):
     smallTestDataset = {
-        date: random.sample(dateData, int(len(dateData) * 0.15))
+        date: random.sample(dateData, int(len(dateData) * 0.01))
         for date, dateData in testDataset.items()
     }
     with open(smallTestDatasetPath, "w") as file:
