@@ -6,7 +6,6 @@ annotated-types==0.7.0
 antlr4-python3-runtime==4.9.3
 attrs==25.3.0
 bitsandbytes==0.46.1
-certifi @ file:///home/conda/feedstock_root/build_artifacts/certifi_1752115297798/work/certifi
 cffi==1.17.1
 charset-normalizer==3.4.2
 click==8.1.8
