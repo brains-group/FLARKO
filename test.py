@@ -177,29 +177,32 @@ def runTests(dataset, goalName="completion", ignoreData="", name=None):
             print(f"falseNegatives[date]: {falseNegatives[date]}")
             print(f"Hits@: {hits[date]}")
         numDatePoints = len(dataset)
-        (
-            "\nFor date: {date}\n"
-            "Number of Tests: {num_tests}\n"
-            "Precision: {precision}\n"
-            "Recall: {recall}\n"
-            "MRR: {mrr}\n"
-            "{hits}"
-        ).format(
-            date=date,
-            num_tests=numDatePoints,
-            precision=truePositives[date]
-            / (truePositives[date] + falsePositives[date]),
-            recall=truePositives[date] / (truePositives[date] + falseNegatives[date]),
-            mrr=mrr[date] / numDatePoints,
-            hits="\n".join(
-                [
-                    "Hits@{}: {}".format(
-                        hitIndex + 1,
-                        hitCount / numDatePoints,
-                    )
-                    for hitIndex, hitCount in enumerate(hits[date])
-                ]
-            ),
+        print(
+            (
+                "\nFor date: {date}\n"
+                "Number of Tests: {num_tests}\n"
+                "Precision: {precision}\n"
+                "Recall: {recall}\n"
+                "MRR: {mrr}\n"
+                "{hits}"
+            ).format(
+                date=date,
+                num_tests=numDatePoints,
+                precision=truePositives[date]
+                / (truePositives[date] + falsePositives[date]),
+                recall=truePositives[date]
+                / (truePositives[date] + falseNegatives[date]),
+                mrr=mrr[date] / numDatePoints,
+                hits="\n".join(
+                    [
+                        "Hits@{}: {}".format(
+                            hitIndex + 1,
+                            hitCount / numDatePoints,
+                        )
+                        for hitIndex, hitCount in enumerate(hits[date])
+                    ]
+                ),
+            )
         )
         numDatapoints += numDatePoints
 
