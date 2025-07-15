@@ -91,6 +91,7 @@ def runTests(dataset, goalName="completion", ignoreData="", name=None):
     for date, data in tqdm(dataset.items()):
         if saveResponses:
             responses[str(date)] = []
+        numDatePoints = 0
         for index, dataPoint in enumerate(
             # tqdm(random.sample(data, math.ceil(len(data) / 5)), leave=False)
             tqdm(data, leave=False)
@@ -200,7 +201,7 @@ def runTests(dataset, goalName="completion", ignoreData="", name=None):
             print(f"falsePositives[date]: {falsePositives[date]}")
             print(f"falseNegatives[date]: {falseNegatives[date]}")
             print(f"Hits@: {hits[date]}")
-        numDatePoints = len(dataset)
+            numDatePoints += 1
         print(
             (
                 "\nFor date: {date}\n"
