@@ -274,38 +274,41 @@ def runTests(dataset, goalName="completion", ignoreData="", name=None):
     )
 
 
-if args.data == "fin":
-    with open("./data/testFinDatasetSmall.json", "r") as file:
-        testDataset = json.load(file)
-        print("Performing Hybrid Test:")
-        print("Performing Overall Test:")
-        print(f"Scores: {runTests(testDataset, "completion")}")
-        print("Performing Adherence Test:")
-        print(f"Scores: {runTests(testDataset, "futurePurchases")}")
-        print("Performing Profit Test:")
-        print(f"Scores: {runTests(testDataset, "profitableAssets")}")
-        print("Performing no Background Test:")
-        print("Performing Overall Test:")
-        print(f"Scores: {runTests(testDataset, "completion", "Background")}")
-        print("Performing Adherence Test:")
-        print(f"Scores: {runTests(testDataset, "futurePurchases", "Background")}")
-        print("Performing Profit Test:")
-        print(f"Scores: {runTests(testDataset, "profitableAssets", "Background")}")
-        print("Performing no Transaction Test:")
-        print("Performing Overall Test:")
-        print(f"Scores: {runTests(testDataset, "completion", "Transaction")}")
-        print("Performing Adherence Test:")
-        print(f"Scores: {runTests(testDataset, "futurePurchases", "Transaction")}")
-        print("Performing Profit Test:")
-        print(f"Scores: {runTests(testDataset, "profitableAssets", "Transaction")}")
-        print("Performing no Data Test:")
-        print("Performing Overall Test:")
-        print(f"Scores: {runTests(testDataset, "completion", "BackgroundTransaction")}")
-        print("Performing Adherence Test:")
-        print(
-            f"Scores: {runTests(testDataset, "futurePurchases", "BackgroundTransaction")}"
-        )
-        print("Performing Profit Test:")
-        print(
-            f"Scores: {runTests(testDataset, "profitableAssets", "BackgroundTransaction")}"
-        )
+if args.data == "div":
+    dataPath = "./data/testFinDatasetSmallDiverse.json"
+else:
+    dataPath = "./data/testFinDatasetSmall.json"
+with open(dataPath, "r") as file:
+    testDataset = json.load(file)
+    print("Performing Hybrid Test:")
+    print("Performing Overall Test:")
+    print(f"Scores: {runTests(testDataset, "completion")}")
+    print("Performing Adherence Test:")
+    print(f"Scores: {runTests(testDataset, "futurePurchases")}")
+    print("Performing Profit Test:")
+    print(f"Scores: {runTests(testDataset, "profitableAssets")}")
+    print("Performing no Background Test:")
+    print("Performing Overall Test:")
+    print(f"Scores: {runTests(testDataset, "completion", "Background")}")
+    print("Performing Adherence Test:")
+    print(f"Scores: {runTests(testDataset, "futurePurchases", "Background")}")
+    print("Performing Profit Test:")
+    print(f"Scores: {runTests(testDataset, "profitableAssets", "Background")}")
+    print("Performing no Transaction Test:")
+    print("Performing Overall Test:")
+    print(f"Scores: {runTests(testDataset, "completion", "Transaction")}")
+    print("Performing Adherence Test:")
+    print(f"Scores: {runTests(testDataset, "futurePurchases", "Transaction")}")
+    print("Performing Profit Test:")
+    print(f"Scores: {runTests(testDataset, "profitableAssets", "Transaction")}")
+    print("Performing no Data Test:")
+    print("Performing Overall Test:")
+    print(f"Scores: {runTests(testDataset, "completion", "BackgroundTransaction")}")
+    print("Performing Adherence Test:")
+    print(
+        f"Scores: {runTests(testDataset, "futurePurchases", "BackgroundTransaction")}"
+    )
+    print("Performing Profit Test:")
+    print(
+        f"Scores: {runTests(testDataset, "profitableAssets", "BackgroundTransaction")}"
+    )
