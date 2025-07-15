@@ -1,5 +1,7 @@
 import datasets
 import argparse
+import random
+import math
 import json
 import sys
 import re
@@ -16,6 +18,8 @@ import sys
 
 from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
+
+random.seed(2025)
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--base_model_path", type=str, default="Qwen/Qwen3-0.6B")
@@ -87,7 +91,11 @@ def runTests(dataset, goalName="completion", ignoreData="", name=None):
     for date, data in tqdm(dataset.items()):
         if saveResponses:
             responses[str(date)] = []
-        for index, dataPoint in enumerate(tqdm(data, leave=False)):
+        numDatePoints = 0
+        for index, dataPoint in enumerate(
+            # tqdm(random.sample(data, math.ceil(len(data) / 5)), leave=False)
+            tqdm(data, leave=False)
+        ):
             if saveResponses:
                 if "Background" in ignoreData:
                     dataPoint["prompt"][1][
@@ -193,7 +201,7 @@ def runTests(dataset, goalName="completion", ignoreData="", name=None):
             print(f"falsePositives[date]: {falsePositives[date]}")
             print(f"falseNegatives[date]: {falseNegatives[date]}")
             print(f"Hits@: {hits[date]}")
-        numDatePoints = len(dataset)
+            numDatePoints += 1
         print(
             (
                 "\nFor date: {date}\n"
@@ -206,9 +214,9 @@ def runTests(dataset, goalName="completion", ignoreData="", name=None):
                 date=date,
                 num_tests=numDatePoints,
                 precision=truePositives[date]
-                / (truePositives[date] + falsePositives[date]),
+                / max(truePositives[date] + falsePositives[date], 1),
                 recall=truePositives[date]
-                / (truePositives[date] + falseNegatives[date]),
+                / max(truePositives[date] + falseNegatives[date], 1),
                 mrr=mrr[date] / numDatePoints,
                 hits="\n".join(
                     [
