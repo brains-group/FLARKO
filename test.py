@@ -294,21 +294,22 @@ with open(dataPath, "r") as file:
     print(f"Scores: {runTests(testDataset, "futurePurchases", "Background")}")
     print("Performing Profit Test:")
     print(f"Scores: {runTests(testDataset, "profitableAssets", "Background")}")
-    print("Performing no Transaction Test:")
-    print("Performing Overall Test:")
-    print(f"Scores: {runTests(testDataset, "completion", "Transaction")}")
-    print("Performing Adherence Test:")
-    print(f"Scores: {runTests(testDataset, "futurePurchases", "Transaction")}")
-    print("Performing Profit Test:")
-    print(f"Scores: {runTests(testDataset, "profitableAssets", "Transaction")}")
-    print("Performing no Data Test:")
-    print("Performing Overall Test:")
-    print(f"Scores: {runTests(testDataset, "completion", "BackgroundTransaction")}")
-    print("Performing Adherence Test:")
-    print(
-        f"Scores: {runTests(testDataset, "futurePurchases", "BackgroundTransaction")}"
-    )
-    print("Performing Profit Test:")
-    print(
-        f"Scores: {runTests(testDataset, "profitableAssets", "BackgroundTransaction")}"
-    )
+    if args.data != "div":
+        print("Performing no Transaction Test:")
+        print("Performing Overall Test:")
+        print(f"Scores: {runTests(testDataset, "completion", "Transaction")}")
+        print("Performing Adherence Test:")
+        print(f"Scores: {runTests(testDataset, "futurePurchases", "Transaction")}")
+        print("Performing Profit Test:")
+        print(f"Scores: {runTests(testDataset, "profitableAssets", "Transaction")}")
+        print("Performing no Data Test:")
+        print("Performing Overall Test:")
+        print(f"Scores: {runTests(testDataset, "completion", "BackgroundTransaction")}")
+        print("Performing Adherence Test:")
+        print(
+            f"Scores: {runTests(testDataset, "futurePurchases", "BackgroundTransaction")}"
+        )
+        print("Performing Profit Test:")
+        print(
+            f"Scores: {runTests(testDataset, "profitableAssets", "BackgroundTransaction")}"
+        )
