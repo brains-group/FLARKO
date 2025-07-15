@@ -5,6 +5,7 @@ import math
 import json
 import sys
 import re
+from transformers.cache_utils import SinkCache
 from collections import defaultdict
 
 sys.path.append("../../")
@@ -120,8 +121,24 @@ def runTests(dataset, goalName="completion", ignoreData="", name=None):
                 # print(f"---------------- PROMPT --------------\n{text}")
 
                 model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
+                
+                if "gemma" in args.base_model_path:
+                    model.generation_config.cache_implementation = None
 
-                generated_ids = model.generate(**model_inputs, max_new_tokens=4096)
+                generated_ids = model.generate(
+                    **model_inputs,
+                    max_new_tokens=4096,
+                    **(
+                        {
+                            "custom_generate": "transformers-community/sink_cache",
+                            "trust_remote_code": True,
+                            "window_length": 16384,
+                            "num_sink_tokens": 32,
+                        }
+                        if "gemma" in args.base_model_path
+                        else {}
+                    ),
+                )
                 generated_ids = [
                     output_ids[len(input_ids) :]
                     for input_ids, output_ids in zip(
@@ -262,32 +279,32 @@ if args.data == "fin":
         print("Performing Hybrid Test:")
         print("Performing Overall Test:")
         print(f"Scores: {runTests(testDataset, "completion")}")
-        print("Performing Profit Test:")
-        print(f"Scores: {runTests(testDataset, "futurePurchases")}")
         print("Performing Adherence Test:")
+        print(f"Scores: {runTests(testDataset, "futurePurchases")}")
+        print("Performing Profit Test:")
         print(f"Scores: {runTests(testDataset, "profitableAssets")}")
         print("Performing no Background Test:")
         print("Performing Overall Test:")
         print(f"Scores: {runTests(testDataset, "completion", "Background")}")
-        print("Performing Profit Test:")
-        print(f"Scores: {runTests(testDataset, "futurePurchases", "Background")}")
         print("Performing Adherence Test:")
+        print(f"Scores: {runTests(testDataset, "futurePurchases", "Background")}")
+        print("Performing Profit Test:")
         print(f"Scores: {runTests(testDataset, "profitableAssets", "Background")}")
         print("Performing no Transaction Test:")
         print("Performing Overall Test:")
         print(f"Scores: {runTests(testDataset, "completion", "Transaction")}")
-        print("Performing Profit Test:")
-        print(f"Scores: {runTests(testDataset, "futurePurchases", "Transaction")}")
         print("Performing Adherence Test:")
+        print(f"Scores: {runTests(testDataset, "futurePurchases", "Transaction")}")
+        print("Performing Profit Test:")
         print(f"Scores: {runTests(testDataset, "profitableAssets", "Transaction")}")
         print("Performing no Data Test:")
         print("Performing Overall Test:")
         print(f"Scores: {runTests(testDataset, "completion", "BackgroundTransaction")}")
-        print("Performing Profit Test:")
+        print("Performing Adherence Test:")
         print(
             f"Scores: {runTests(testDataset, "futurePurchases", "BackgroundTransaction")}"
         )
-        print("Performing Adherence Test:")
+        print("Performing Profit Test:")
         print(
             f"Scores: {runTests(testDataset, "profitableAssets", "BackgroundTransaction")}"
         )
