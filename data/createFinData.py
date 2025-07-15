@@ -1,5 +1,7 @@
+from copy import deepcopy
 import pickle
 import random
+import re
 import pandas as pd
 import numpy as np
 from rdflib import Graph, Literal, RDF, URIRef, Namespace
@@ -919,3 +921,30 @@ else:
 print(len(smallTestDataset))
 for dateData in smallTestDataset.values():
     print(len(dateData))
+
+
+# -------------- Creating Diversity Dataset ----------------------
+diverseSmallTestDatasetPath = "./testFinDatasetSmallDiverse.json"
+if not os.path.exists(diverseSmallTestDatasetPath):
+    diverseSmallTestDataset = deepcopy(smallTestDataset)
+    for dateSet in diverseSmallTestDataset.values():
+        for datapoint in dateSet:
+            graphPrompt = datapoint["prompt"][2]["content"]
+            assetInstances = re.findall(r"isin::([^\"]+)")
+            diversityAssets = random.sample(allAssets, min(20, len(assetInstances)))
+            for diversityAsset in diversityAssets:
+                target = random.choice(assetInstances)
+                targetIndex = random.choice(
+                    [match.start() for match in re.finditer(target, graphPrompt)]
+                )
+                graphPrompt = (
+                    graphPrompt[:targetIndex]
+                    + str(diversityAsset)
+                    + graphPrompt[(targetIndex + len(target)) :]
+                )
+            datapoint["prompt"][2]["content"] = graphPrompt
+    with open(diverseSmallTestDatasetPath, "w") as file:
+        json.dump(diverseSmallTestDataset, file, indent=4)
+else:
+    with open(diverseSmallTestDatasetPath, "r") as file:
+        diverseSmallTestDataset = json.load(file)
