@@ -930,10 +930,11 @@ if not os.path.exists(diverseSmallTestDatasetPath):
     for dateSet in diverseSmallTestDataset.values():
         for datapoint in dateSet:
             graphPrompt = datapoint["prompt"][2]["content"]
-            assetInstances = re.findall(r"isin::([^\"]+)")
-            diversityAssets = random.sample(allAssets, min(20, len(assetInstances)))
+            assetInstances = re.findall(r"isin::([^\"]+)", graphPrompt)
+            diversityAssets = random.sample(list(allAssets), min(20, len(assetInstances)))
             for diversityAsset in diversityAssets:
                 target = random.choice(assetInstances)
+                assetInstances.remove(target)
                 targetIndex = random.choice(
                     [match.start() for match in re.finditer(target, graphPrompt)]
                 )
