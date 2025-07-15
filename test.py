@@ -25,6 +25,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--base_model_path", type=str, default="Qwen/Qwen3-0.6B")
 parser.add_argument("--lora_path", type=str, default=None)
 parser.add_argument("--data", type=str, default="fin")
+parser.add_argument("--smaller", action=argparse.BooleanOptionalAction)
 args = parser.parse_args()
 print(args)
 
@@ -93,7 +94,6 @@ def runTests(dataset, goalName="completion", ignoreData="", name=None):
             responses[str(date)] = []
         numDatePoints = 0
         for index, dataPoint in enumerate(
-            # tqdm(random.sample(data, math.ceil(len(data) / 5)), leave=False)
             tqdm(data, leave=False)
         ):
             if saveResponses:
@@ -280,6 +280,8 @@ else:
     dataPath = "./data/testFinDatasetSmall.json"
 with open(dataPath, "r") as file:
     testDataset = json.load(file)
+    if args.smaller:
+        testDataset = {date:random.sample(data, math.ceil(len(data)/10)) for date, data in testDataset.items()}
     print("Performing Hybrid Test:")
     print("Performing Overall Test:")
     print(f"Scores: {runTests(testDataset, "completion")}")
