@@ -64,8 +64,11 @@ def runTests(dataset, goalName="completion", ignoreData="", name=None):
     if name is None:
         name = (
             args.base_model_path
-            + "_"
-            + args.lora_path.replace("/", "-")
+            + (
+                ("_" + args.lora_path.replace("/", "-"))
+                if args.lora_path is not None
+                else ""
+            )
             + "_"
             + args.data
             + "_ignore"
@@ -93,9 +96,7 @@ def runTests(dataset, goalName="completion", ignoreData="", name=None):
         if saveResponses:
             responses[str(date)] = []
         numDatePoints = 0
-        for index, dataPoint in enumerate(
-            tqdm(data, leave=False)
-        ):
+        for index, dataPoint in enumerate(tqdm(data, leave=False)):
             if saveResponses:
                 if "Background" in ignoreData:
                     dataPoint["prompt"][1][
@@ -122,7 +123,7 @@ def runTests(dataset, goalName="completion", ignoreData="", name=None):
                 # print(f"---------------- PROMPT --------------\n{text}")
 
                 model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
-                
+
                 if "gemma" in args.base_model_path:
                     model.generation_config.cache_implementation = None
 
@@ -281,7 +282,10 @@ else:
 with open(dataPath, "r") as file:
     testDataset = json.load(file)
     if args.smaller:
-        testDataset = {date:random.sample(data, math.ceil(len(data)/10)) for date, data in testDataset.items()}
+        testDataset = {
+            date: random.sample(data, math.ceil(len(data) / 10))
+            for date, data in testDataset.items()
+        }
     print("Performing Hybrid Test:")
     print("Performing Overall Test:")
     print(f"Scores: {runTests(testDataset, "completion")}")
