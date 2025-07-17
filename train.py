@@ -8,6 +8,7 @@ from flwr_datasets.partitioner import IidPartitioner
 from datasets import load_dataset
 from flwr.client.mod import fixedclipping_mod
 from flwr.server.strategy import DifferentialPrivacyClientSideFixedClipping
+from omegaconf import open_dict
 
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from datetime import datetime
@@ -21,6 +22,7 @@ parser.add_argument("--cfg_file", type=str, default="federated_full")
 parser.add_argument("--base_model_path", type=str, default=None)
 parser.add_argument("--num_rounds", type=str, default=None)
 parser.add_argument("--dataset_name", type=str, default=None)
+parser.add_argument("--lora_path", type=str, default=None)
 args = parser.parse_args()
 
 cfg = get_config(args.cfg_file)
@@ -32,6 +34,9 @@ if args.num_rounds is not None:
     cfg.flower.num_rounds = int(args.num_rounds)
 if args.dataset_name is not None:
     cfg.dataset.name = args.dataset_name
+if args.lora_path is not None:
+    with open_dict(cfg):
+        cfg.model.lora.path = args.lora_path
 
 print_config(cfg)
 

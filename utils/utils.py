@@ -241,7 +241,10 @@ def get_model(model_cfg: DictConfig):
         target_modules=target_modules,
     )
 
-    peft_model = get_peft_model(model, peft_config)
+    if "path" in model_cfg.lora:
+        peft_model = PeftModel.from_pretrained(model, model_cfg.lora.path)
+    else:
+        peft_model = get_peft_model(model, peft_config)
     if not (use_cuda):
         peft_model.enable_input_require_grads()
 
