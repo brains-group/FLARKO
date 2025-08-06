@@ -5,7 +5,7 @@
 [![Flower](https://img.shields.io/badge/Flower-1.19.0-green.svg)](https://flower.dev/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-FLARKO is a framework specifically designed for financial asset recommendation systems combinining knowledge graphs and large language models. FLARKO comes in two flavors, CenFLARKO (operates FLARKO in a centralized setting), and FedFLARKO (operates FLARKO in federated setting). 
+FLARKO is a framework specifically designed for financial asset recommendation systems, combining knowledge graphs and large language models. FLARKO comes in two flavors: CenFLARKO (operates FLARKO in a centralized setting), and FedFLARKO (operates FLARKO in a federated setting). 
 
 ## Key Features
 
