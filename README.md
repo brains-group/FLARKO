@@ -22,7 +22,6 @@ FLARKO is a framework specifically designed for financial asset recommendation s
 - [Data Preparation](#data-preparation)
 - [Training](#training)
 - [Evaluation](#evaluation)
-- [Configuration](#configuration)
 - [License](#license)
 
 ## Installation
@@ -51,6 +50,7 @@ pip install -r requirements.txt
 
 ```bash
 # Create financial datasets
+cd data
 python data/createFinData.py
 ```
 
@@ -65,7 +65,7 @@ python centralized_train.py --cfg_file centralized_full
 
 ```bash
 # Start federated training
-python train.py --cfg_file federated_full --num_rounds 50
+python train.py --cfg_file federated_full --num_rounds 200
 ```
 
 ### 4. Model Evaluation
@@ -137,13 +137,43 @@ The system uses two main knowledge graphs:
 
 ## Training
 
-### LLM Model
+### LLM Configuration
 
-The LLM model can be trained normally by running `centralized_train.py`. The dataset, model, and hyperparameters can be adjusted by editing `centralized_full.yaml` in the `conf` folder.
+The chosen LLM can be trained normally by running `centralized_train.py`. The dataset, model, and hyperparameters can be adjusted by editing `centralized_full.yaml` in the `conf` folder.
 Additionally, you can override the base model path by passing a `--base_model_path` argument. You can also override the dataset name used by passing the `--dataset_name` argument, and you can pass the `--dataset_index` if you are using a federated dataset and want to train on just one client's data (used for the local training ablation).
 
-The LLM model can be trained via a federated simulation by running `train.py`. The dataset, model, and hyperparameters can be adjusted by editing `federated_full.yaml` in the `conf` folder.
+The chosen LLM can be trained via a federated simulation by running `train.py`. The dataset, model, and hyperparameters can be adjusted by editing `federated_full.yaml` in the `conf` folder.
 Additionally, you can override the base model path by passing a `--base_model_path` argument, and you can override the number of federated training rounds by passing the `--num_rounds` argument (useful for resuming from a checkpoint). You can also override the dataset name used by passing the `--dataset_name` argument.
+
+Available configurations in `conf/`:
+
+- **Federated**: `federated_full.yaml`, `federated_full_4B.yaml`, etc.
+- **Centralized**: `centralized_full.yaml`, `centralized_full_8B.yaml`, etc.
+- **Model Variants**: Qwen3 (0.6B, 4B, 8B), Gemma3 (1B, 4B)
+
+### Custom Configuration
+
+```yaml
+# Create custom config
+dataset:
+  path: "./data/{}.json"
+  name: "your_dataset"
+
+model:
+  name: "your_model"
+  quantization: 4
+  lora:
+    peft_lora_r: 16
+    peft_lora_alpha: 64
+
+train:
+  seq_length: 131072
+  learning_rate: 5e-6
+
+flower:
+  num_rounds: 100
+  sample_clients: 3
+```
 
 
 ### Centralized Training
@@ -252,40 +282,6 @@ python test.py --base_model_path Qwen/Qwen3-4B --lora_path ./models/your_model
 |                | MKG      |    0.2927 ± 0.0711   |    0.3415 ± 0.0741   |    0.2439 ± 0.0671   |
 |                | Nothing  |    0.2745 ± 0.0625   |    0.3333 ± 0.0660   |    0.2157 ± 0.0576   |
 
-
-## Configuration
-
-### Model Configurations
-
-Available configurations in `conf/`:
-
-- **Federated**: `federated_full.yaml`, `federated_full_4B.yaml`, etc.
-- **Centralized**: `centralized_full.yaml`, `centralized_full_8B.yaml`, etc.
-- **Model Variants**: Qwen3 (0.6B, 4B, 8B), Gemma3 (1B, 4B)
-
-### Custom Configuration
-
-```yaml
-# Create custom config
-dataset:
-  path: "./data/{}.json"
-  name: "your_dataset"
-
-model:
-  name: "your_model"
-  quantization: 4
-  lora:
-    peft_lora_r: 16
-    peft_lora_alpha: 64
-
-train:
-  seq_length: 131072
-  learning_rate: 5e-6
-
-flower:
-  num_rounds: 100
-  sample_clients: 3
-```
 
 ## License
 
