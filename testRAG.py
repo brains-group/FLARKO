@@ -543,7 +543,6 @@ class SubgraphRetriever(BaseRetriever):
 # =============================================================================
 # PART 4: DYNAMIC RAG PIPELINE
 # =============================================================================
-
 SYSTEM_PROMPT_TASK = """You are an expert financial analyst AI. Your task is to analyze a user's transaction history and supplementary market data to provide personalized asset recommendations. The user will ask for recommendations for the next 6 months from a given "current date".
 
 You MUST provide your response in the following format, and only this format:
