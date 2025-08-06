@@ -13,6 +13,7 @@ from itertools import chain
 import yaml
 from pathlib import Path
 from typing import List, Dict
+from functools import partial
 
 sys.path.append("../../")
 sys.path.append("../../../")
@@ -24,13 +25,14 @@ import pickle
 import pandas as pd
 
 from peft import PeftModel
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 
 
 from langchain_core.retrievers import BaseRetriever
 from langchain_core.callbacks import CallbackManagerForRetrieverRun
 from langchain_core.documents import Document
 from langchain_core.language_models import BaseLanguageModel
+from langchain_huggingface import HuggingFacePipeline
 from langchain_core.prompts import (
     ChatPromptTemplate,
     SystemMessagePromptTemplate,
@@ -52,7 +54,7 @@ class GlobalCommunityReports:
 random.seed(2025)
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--base_model_path", type=str, default="Qwen/Qwen3-0.6B")
+parser.add_argument("--base_model_path", type=str, default="Qwen/Qwen3-4B")
 parser.add_argument("--lora_path", type=str, default=None)
 parser.add_argument("--divide", type=int, default=None)
 args = parser.parse_args()
@@ -119,10 +121,11 @@ with open("./data/clients.pkl", "rb") as file:
 #     )
 # sys.exit()
 transactionKGs = {
-    next(transactionKG[: RDF.type : SECURITY.User]): transactionKG
+    next(transactionKG[: RDF.type : SECURITY.User])[len(USER_PREFIX) :]: transactionKG
     for client in clients
     for transactionKG in client
 }
+# print(list(transactionKGs.values()))
 
 
 customerSubgraphCache = {}
@@ -130,6 +133,8 @@ backgroundSubgraphCache = {}
 
 
 def getCustomerSubgraphUntilDate(user: str, endDate: str) -> Graph:
+    if user is None:
+        return Graph()
     global customerSubgraphCache, transactionKGs
     idStr = user + "_" + endDate
     if idStr in customerSubgraphCache:
@@ -155,7 +160,7 @@ def getCustomerSubgraphUntilDate(user: str, endDate: str) -> Graph:
             graph[transactionURI : SECURITY.transactionTimestamp :]
         ).toPython()
 
-        if priceDate <= endDate.date():
+        if priceDate <= endDate:
             for s, p, o in graph.triples((transactionURI, None, None)):
                 subgraph.add((s, p, o))
 
@@ -190,7 +195,7 @@ def getBackgroundSubgraphUntilDate(endDate: str) -> Graph:
     for priceObservation in datapoints:
         priceDate = next(graph[priceObservation : SECURITY.periodEndDate :]).toPython()
 
-        if priceDate <= endDate.date():
+        if priceDate <= endDate:
             for s, p, o in graph.triples((priceObservation, None, None)):
                 subgraph.add((s, p, o))
 
@@ -202,78 +207,6 @@ def getBackgroundSubgraphUntilDate(endDate: str) -> Graph:
 
     backgroundSubgraphCache[endDate] = subgraph
     return subgraph
-
-
-# BACKGROUND_KG_INPUT_DIR = "./data/GraphRAG/backgroundGraphs/"
-# TRANSACTION_KGs_INPUT_DIR = "./data/GraphRAG/transactionGraphs/"
-
-
-# def getBackgroundDir(dateString):
-#     path = BACKGROUND_KG_INPUT_DIR + "/" + dateString
-#     os.makedirs(path, exist_ok=True)
-#     return path
-
-
-# def getTransactionDir(dateString, user):
-#     path = TRANSACTION_KGs_INPUT_DIR + "/" + dateString + "/" + user
-#     os.makedirs(path, exist_ok=True)
-#     return path
-
-
-# def prepareCSVDataForDate(dateString: str, user: str):
-#     global backgroundKG, transactionKGs
-
-#     def convertKGtoGraphRAGFormat(dir_path, kg):
-#         os.makedirs(dir_path, exist_ok=True)
-#         entities = {}
-#         relationships = []
-
-#         for s, p, o in kg:
-#             source_id, target_id = str(s), str(o)
-#             s_splitter = "/" if "/" in s else ":"
-#             o_splitter = "/" if "/" in o else ":"
-#             p_splitter = "/" if "/" in p else ":"
-#             if source_id not in entities:
-#                 entities[source_id] = {
-#                     "id": source_id,
-#                     "title": s.split(s_splitter)[-1],
-#                 }
-#             if isinstance(o, URIRef) and target_id not in entities:
-#                 entities[target_id] = {
-#                     "id": target_id,
-#                     "title": o.split(o_splitter)[-1],
-#                 }
-#             elif isinstance(o, Literal):
-#                 entities[source_id][p.split(p_splitter)[-1]] = str(o)
-#             if isinstance(o, URIRef):
-#                 relationships.append(
-#                     {
-#                         "source": source_id,
-#                         "target": target_id,
-#                         "relationship": p.split(p_splitter)[-1],
-#                     }
-#                 )
-
-#         pd.DataFrame(list(entities.values())).to_csv(
-#             f"{dir_path}/entities.csv", index=False
-#         )
-#         pd.DataFrame(relationships).to_csv(f"{dir_path}/relationships.csv", index=False)
-
-#     backgroundPath = getBackgroundDir(dateString)
-#     if not os.path.exists(backgroundPath):
-#         convertKGtoGraphRAGFormat(
-#             backgroundPath, getBackgroundSubgraphUntilDate(backgroundKG, dateString)
-#         )
-#     if user is not None:
-#         transactionPath = getTransactionDir(dateString, user)
-#         if not os.path.exists(transactionPath):
-#             convertKGtoGraphRAGFormat(
-#                 transactionPath,
-#                 getBackgroundSubgraphUntilDate(transactionKGs[user], dateString),
-#             )
-#     else:
-#         transactionPath = None
-#     return backgroundPath, transactionPath
 
 
 # ============= Extract model name from the path. The name is used for saving results. =============
@@ -305,14 +238,31 @@ if args.lora_path is not None:
         model, args.lora_path, torch_dtype=torch.float16
     ).to(device)
 tokenizer = AutoTokenizer.from_pretrained(args.base_model_path, use_fast=False)
+retrievePipe = pipeline(
+    "text-generation",
+    model=model,
+    tokenizer=tokenizer,
+    max_new_tokens=4096,
+)
+pipe = pipeline(
+    "text-generation",
+    model=model,
+    tokenizer=tokenizer,
+    max_new_tokens=4096,
+)
+llm = HuggingFacePipeline(pipeline=pipe)
+retrieve_llm = HuggingFacePipeline(pipeline=pipe)
 print("Model loaded successfully.")
 
 NODE_IDENTIFICATION_TEMPLATE = """
 Your goal is to select a small, relevant subset of entities from a knowledge graph to help with a financial recommendation task.
 Based on the user's request, identify the most relevant entities from the list provided.
 
-Return a comma-separated list of the chosen entity URIs. For example: "ex:asset1, ex:transaction5, ex:asset3"
-Do not return more than 15 entities.
+Return only a bulleted list of the chosen entity URIs. Following this exact format:
+- [ENTITY_URI_1]
+- [ENTITY_URI_2]
+- [ENTITY_URI_3]
+- ...
 
 ## Entity List:
 {entity_list}
@@ -328,10 +278,47 @@ def clean_qwen_output(text: str) -> str:
     """
     Removes the <think>...</think> block from the Qwen model's output.
     """
+    print(
+        "---------------------------- Identified -----------------------------" + text
+    )
     # Use a regular expression to find and remove the think block
-    cleaned_text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    # answerStartString = NODE_IDENTIFICATION_TEMPLATE[:-1][
+    #     (NODE_IDENTIFICATION_TEMPLATE.rfind("\n") + 1) :
+    # ]
+    answerStartString = "## Relevant Entity URIs:"
+    cleaned_text = text[(text.rfind(answerStartString) + len(answerStartString)) :]
+    if cleaned_text.rfind("</think>") == -1:
+        return ""
+    cleaned_text = cleaned_text[(cleaned_text.rfind("</think>") + len("</think>")) :]
+    # upToFirstItemText = cleaned_text[: text.find("http://")]
+    # cleaned_text = text[
+    #     (upToFirstItemText.rfind("\n")) : (
+    #         len(upToFirstItemText) + cleaned_text[len(upToFirstItemText) :].find("\n")
+    #     )
+    # ]
+    bullet_items = []
+    foundBullet = False
+    for line in cleaned_text.splitlines():
+        if line.strip().startswith("-"):
+            bullet_items.append(line.lstrip("- ").strip())
+            foundBullet = True
+        else:
+            if foundBullet:
+                break
+    # bullet_items = [
+    #     line.lstrip("- ").strip()
+    #     for line in cleaned_text.splitlines()
+    #     if line.strip().startswith("-")
+    # ]
+
+    if bullet_items:
+        # If we found any bullet items, join them with a comma and space
+        return ", ".join(bullet_items)
     # Also strip any leading/trailing whitespace that might be left over
-    return cleaned_text.strip()
+    return None
+
+
+MAX_ENTITIES = 50
 
 
 class SubgraphRetriever(BaseRetriever):
@@ -357,19 +344,38 @@ class SubgraphRetriever(BaseRetriever):
             return [
                 Document(page_content="{}")
             ]  # Return empty JSON-LD if no candidates
+        if len(candidate_uris) > MAX_ENTITIES * 4:
+            candidate_uris = random.sample(candidate_uris, MAX_ENTITIES * 4)
 
         # Define the custom parser to clean the LLM output
-        qwen_parser = RunnableLambda(
-            clean_qwen_output if "Qwen" in args.base_model_path else lambda x: x
-        )
+        qwen_parser = RunnableLambda(clean_qwen_output)
 
         # 2. Use an LLM to identify the most relevant entities from the list
-        prompt = PromptTemplate.from_template(NODE_IDENTIFICATION_TEMPLATE)
+        # prompt = PromptTemplate.from_template(NODE_IDENTIFICATION_TEMPLATE)
+        def applyTemp(inputs):
+            return tokenizer.apply_chat_template(
+                [
+                    {
+                        "content": NODE_IDENTIFICATION_TEMPLATE.format(**inputs),
+                        "role": "user",
+                    }
+                ],
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+
+        prompt = RunnableLambda(applyTemp)
         node_identification_chain = prompt | self.llm | qwen_parser | StrOutputParser()
 
         identified_nodes_str = node_identification_chain.invoke(
             {"entity_list": "\n".join(candidate_uris), "request": query}
         )
+        print(
+            "---------------------------- Identified -----------------------------\n"
+            + identified_nodes_str
+        )
+        if identified_nodes_str is None:
+            return None
 
         # 3. Programmatically build a CONSTRUCT query for the identified nodes
         node_list = [
@@ -377,6 +383,7 @@ class SubgraphRetriever(BaseRetriever):
         ]
         if not node_list:
             return [Document(page_content="{}")]
+        node_list = node_list[:MAX_ENTITIES]
 
         # This query constructs a subgraph including all triples where the identified
         # nodes are either the subject or the object.
@@ -390,6 +397,7 @@ class SubgraphRetriever(BaseRetriever):
           {{ ?s ?p ?node . BIND(?node as ?o) }}
         }}
         """
+        # print(sparql_construct_query)
 
         # 4. Execute the query to get the subgraph
         subgraph = self.graph.query(sparql_construct_query).graph
@@ -399,145 +407,6 @@ class SubgraphRetriever(BaseRetriever):
         # 5. Serialize the subgraph to JSON-LD and return as a single Document
         jsonld_output = subgraph.serialize(format="json-ld", indent=None)
         return [Document(page_content=jsonld_output)]
-
-
-# class LLMOutput:
-#     """A custom wrapper to use a local Hugging Face model with GraphRAG."""
-
-#     def __init__(self, response, prompt_tokens, completion_tokens):
-#         self.response = response
-#         self.prompt_tokens = prompt_tokens
-#         self.completion_tokens = completion_tokens
-
-
-# class LLMInput:
-#     """A custom wrapper to use a local Hugging Face model with GraphRAG."""
-
-#     def __init__(self, messages):
-#         self.messages = messages
-
-
-# # --- Create the Custom Wrapper Class ---
-# class HuggingFaceWrapper(ChatModel):
-#     """A custom wrapper to use a local Hugging Face model with GraphRAG."""
-
-#     def __init__(self, model, tokenizer):
-#         self.model = model
-#         self.tokenizer = tokenizer
-
-#     def __call__(self, input: LLMInput, clean: bool = True) -> LLMOutput:
-#         text = self.tokenizer.apply_chat_template(
-#             input.messages, tokenize=False, add_generation_prompt=True
-#         )
-
-#         model_inputs = self.tokenizer([text], return_tensors="pt").to(model.device)
-
-#         generated_ids = self.model.generate(
-#             **model_inputs,
-#             max_new_tokens=4096,
-#         )
-#         generated_ids = [
-#             output_ids[len(input_ids) :]
-#             for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
-#         ]
-
-#         response = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[
-#             0
-#         ]
-
-#         # Clean the <think> blocks from the final generated text
-#         if clean:
-#             response = re.sub(
-#                 r"<think>.*?</think>", "", response, flags=re.DOTALL
-#             ).strip()
-
-#         return LLMOutput(
-#             response=response,
-#             prompt_tokens=num_tokens(text),
-#             completion_tokens=num_tokens(response),
-#         )
-
-
-# # =============================================================================
-# # PART 3: GRAPHRAG SETUP & INDEXING
-# # =============================================================================
-# rootGraphRAGDir = "./graphRAG"
-# os.makedirs(rootGraphRAGDir, exist_ok=True)
-
-
-# def setup_and_run_indexing(dateString, user):
-#     """Creates config files and runs the GraphRAG indexing process."""
-#     print("--- Part 3: Setting up and running GraphRAG indexing ---")
-#     backgroundInputPath, transactionInputPath = prepareCSVDataForDate(dateString, user)
-#     backgroundOutputPath = backgroundInputPath.replace("./data", rootGraphRAGDir)
-#     transactionOutputPath = transactionInputPath.replace("./data", rootGraphRAGDir)
-#     configs = {
-#         "transaction_kg_{}_{}.yml".format(dateString, user): {
-#             "input_dir": transactionInputPath,
-#             "output_dir": transactionOutputPath,
-#         },
-#         "background_kg_{}.yml".format(dateString): {
-#             "input_dir": backgroundInputPath,
-#             "output_dir": backgroundOutputPath,
-#         },
-#     }
-#     for filename, paths in configs.items():
-#         fileDir = "./conf/GraphRAG/"
-#         filePath = fileDir + filename
-#         config_data = {
-#             "llm": {
-#                 "type": "static_response",
-#                 "response": "This is a mock response for indexing.",
-#             },
-#             "storage": {"type": "file", "base_dir": paths["output_dir"]},
-#             "input": {
-#                 "type": "file",
-#                 "base_dir": paths["input_dir"],
-#                 "entity": {
-#                     "file_type": "csv",
-#                     "source": "entities.csv",
-#                     "id": "id",
-#                     "title": "title",
-#                 },
-#                 "relationship": {
-#                     "file_type": "csv",
-#                     "source": "relationships.csv",
-#                     "source_id": "source",
-#                     "target_id": "target",
-#                 },
-#             },
-#         }
-#         if not os.path.exists(filePath):
-#             os.makedirs(fileDir, exist_ok=True)
-#             os.makedirs(paths["output_dir"], exist_ok=True)
-#             with open(filePath, "w") as f:
-#                 yaml.dump(config_data, f)
-
-#             print(f"Running indexing for {filePath}...")
-#             index_cli(
-#                 Path(rootGraphRAGDir),
-#                 IndexingMethod.Standard,
-#                 False,
-#                 False,
-#                 False,
-#                 Path(filePath),
-#                 False,
-#                 True,
-#                 Path(paths["output_dir"]),
-#             )
-#             # subprocess.run(
-#             #     [
-#             #         "graphrag",
-#             #         "index",
-#             #         "--root",
-#             #         ".",
-#             #         "-c",
-#             #         filePath,
-#             #     ],
-#             #     check=True,
-#             # )
-#     print("Indexing complete for all graphs.\n")
-#     return backgroundOutputPath, transactionOutputPath
 
 
 # =============================================================================
@@ -584,7 +453,7 @@ ASSETS_CANDIDATE_QUERY = """
 
 
 def get_jsonld_from_docs(docs: List[Document]) -> str:
-    return docs[0].page_content if docs else "{}"
+    return docs[0].page_content if docs else (None if docs is None else "{}")
 
 
 def create_asset_query(input: dict) -> str:
@@ -601,12 +470,43 @@ def create_asset_query(input: dict) -> str:
     """
 
 
+def format_qwen_chat_template(input_dict: dict, tokenizer) -> str:
+    """
+    Formats the final prompt for Qwen3 using the tokenizer's chat template.
+    """
+    # Build the list of messages in the required format
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT_TASK},
+        {
+            "role": "system",
+            "content": SYSTEM_PROMPT_BACKGROUND.format(
+                assets_jsonld=input_dict["assets_jsonld"]
+            ),
+        },
+        {
+            "role": "system",
+            "content": SYSTEM_PROMPT_TRANSACTION.format(
+                transactions_jsonld=input_dict["transactions_jsonld"]
+            ),
+        },
+        # The user's request goes into the final 'user' role message
+        {"role": "user", "content": input_dict["user_question"]},
+    ]
+
+    # Use the tokenizer to apply the chat template.
+    # tokenize=False returns a single formatted string.
+    # add_generation_prompt=True adds the required tokens to signal the model to start generating.
+    return tokenizer.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True
+    )
+
+
 def ragCall(
     prompts,
     getTransactionData: bool = True,
     getMarketData: bool = True,
 ):
-    global model
+    global llm
     user_prompt = prompts[-1]["content"]
     currentDate = re.search(r"current date is ([^,]+),", user_prompt).group(1)
     userSearch = re.search(r"users::([^\"]+)\"", prompts[2]["content"])
@@ -617,140 +517,79 @@ def ragCall(
 
     retriever_transactions = SubgraphRetriever(
         graph=transactions_graph,
-        llm=model,
+        llm=retrieve_llm,
         candidate_query=TRANSACTIONS_CANDIDATE_QUERY,
     )
     retriever_assets = SubgraphRetriever(
-        graph=assets_graph, llm=model, candidate_query=ASSETS_CANDIDATE_QUERY
+        graph=assets_graph, llm=retrieve_llm, candidate_query=ASSETS_CANDIDATE_QUERY
     )
 
+    qwen_formatter = RunnableLambda(
+        partial(format_qwen_chat_template, tokenizer=tokenizer)
+    )
+    # Invoke the first step
+    retrieved_transactions = (
+        (
+            (lambda inputs: user_prompt) | retriever_transactions | get_jsonld_from_docs
+        ).invoke({"user_question": user_prompt})
+        if getTransactionData
+        else lambda _: "Empty"
+    )
+
+    if retrieved_transactions == None:
+        print("--- Retrieval failed at transaction step. Halting. ---")
+        return None
+
+    retrieved_assets = (
+        ((create_asset_query | retriever_assets | get_jsonld_from_docs)).invoke(
+            {
+                "user_question": user_prompt,
+                "transactions_jsonld": getTransactionData,
+            }
+        )
+        if getMarketData
+        else lambda _: "Empty"
+    )
+
+    if retrieved_assets == None:
+        print("--- Retrieval failed at asset step. Halting. ---")
+        return None
+
     rag_chain = (
-        {
-            "transactions_jsonld": (
-                (
-                    (lambda inputs: inputs["user_question"])
-                    | retriever_transactions
-                    | get_jsonld_from_docs
-                )
-                if getTransactionData
-                else "Empty"
-            ),
-            "user_question": (lambda inputs: inputs["user_question"]),
-        }
-        | RunnablePassthrough.assign(
-            assets_jsonld=(
-                (create_asset_query | retriever_assets | get_jsonld_from_docs)
-                if getMarketData
-                else "Empty"
-            )
-        )
-        | ChatPromptTemplate.from_messages(
-            [
-                ("system", SYSTEM_PROMPT_TASK),
-                ("system", SYSTEM_PROMPT_BACKGROUND),
-                ("system", SYSTEM_PROMPT_TRANSACTION),
-                ("human", "{user_question}"),
-            ]
-        )
-        | model
+        # {
+        #     "transactions_jsonld": (
+        #         (
+        #             (lambda inputs: inputs["user_question"])
+        #             | retriever_transactions
+        #             | get_jsonld_from_docs
+        #         )
+        #         if getTransactionData
+        #         else lambda _: "Empty"
+        #     ),
+        #     "user_question": (lambda inputs: inputs["user_question"]),
+        # }
+        # | RunnablePassthrough.assign(
+        #     assets_jsonld=(
+        #         (create_asset_query | retriever_assets | get_jsonld_from_docs)
+        #         if getMarketData
+        #         else lambda _: "Empty"
+        #     )
+        # )
+        # |
+        qwen_formatter
+        | llm
         | StrOutputParser()
     )
 
-    response = rag_chain.invoke({"user_question": user_prompt})
+    response = rag_chain.invoke(
+        {
+            "user_question": user_prompt,
+            "transactions_jsonld": retrieved_transactions,
+            "assets_jsonld": retrieved_assets,
+        }
+    )
 
     return response
-
-
-# def setup_query_engine(storage_dir: str, llm_wrapper):
-#     """Loads an indexed graph and sets up its query engine."""
-#     engine = LocalSearch(
-#         llm=llm_wrapper,
-#         context_builder=GlobalCommunityReports(
-#             llm=llm_wrapper,
-#             community_reports=None,
-#             conversation_history=ConversationHistory(max_turns=5),
-#         ),
-#         community_level=2,
-#         response_type="multiple paragraphs",
-#     )
-#     engine.load_context(storage_dir)
-#     return engine
-
-
-# def generate_search_query(user_prompt: str, llm_wrapper) -> str:
-#     """Uses the LLM to distill a user prompt into a concise search query."""
-#     messages = [
-#         {
-#             "role": "system",
-#             "content": "You are an expert at creating search queries. Given a user's request, extract the core intent into a short query for a financial knowledge graph.",
-#         },
-#         {"role": "user", "content": user_prompt},
-#     ]
-#     llm_input = LLMInput(messages=messages)
-#     response = llm_wrapper(llm_input)
-#     return response.response
-
-
-# llm_wrapper = HuggingFaceWrapper(model, tokenizer)
-
-
-# def run_financial_query(
-#     prompts: list,
-#     getTransactionData: bool = True,
-#     getMarketData: bool = True,
-# ):
-#     global llm_wrapper
-#     user_prompt = prompts[-1]["content"]
-#     currentDate = re.search(r"current date is ([^,]+),", user_prompt).group(1)
-#     userSearch = re.search(r"users::([^\"]+)\"", prompts[2]["content"])
-#     user = userSearch.group(1) if userSearch else None
-#     backgroundOutputPath, transactionOutputPath = setup_and_run_indexing(
-#         currentDate, user
-#     )
-
-#     """Runs the full two-step RAG pipeline."""
-#     print("--- Part 4: Executing Dynamic RAG Pipeline ---")
-
-#     # 1. Generate the initial search query from the user's prompt
-#     initial_query = generate_search_query(user_prompt, llm_wrapper)
-#     print(f"Dynamically generated search query: '{initial_query}'")
-
-#     if user is not None and getTransactionData:
-#         # 2. First Retrieval (Transaction History) - STEP 1
-#         transaction_engine = setup_query_engine(transactionOutputPath, llm_wrapper)
-#         print("\n-> Step 1: Retrieving from Transaction History KG...")
-#         response_transactions = transaction_engine.run(initial_query)
-#         context_transactions = response_transactions.response
-#     else:
-#         context_transactions = "Empty"
-
-#     if getMarketData:
-#         # 3. Second Retrieval (Market Data) - STEP 2
-#         market_engine = setup_query_engine(backgroundOutputPath, llm_wrapper)
-#         print("-> Step 2: Retrieving from Market Data KG...")
-#         # Augment the query with context from the user's transaction history
-#         augmented_query = f"{initial_query}\n\nRelevant transaction history context: {context_transactions}"
-#         response_market = market_engine.run(augmented_query)
-#         context_market = response_market.response
-#     else:
-#         context_market = "Empty"
-
-#     # 4. Final Prompt Assembly and Generation
-#     print("-> Step 3: Assembling final prompt and generating answer...")
-
-#     final_messages = [
-#         {"role": "system", "content": SYSTEM_PROMPT_TASK},
-#         {"role": "system", "content": SYSTEM_PROMPT_BACKGROUND.format(context_market)},
-#         {
-#             "role": "system",
-#             "content": SYSTEM_PROMPT_TRANSACTION.format(context_transactions),
-#         },
-#         {"role": "user", "content": user_prompt},
-#     ]
-
-#     final_input = LLMInput(messages=final_messages)
-#     final_response = llm_wrapper(final_input, clean=False)
-#     return final_response.response
 
 
 # =============================================================================
@@ -794,17 +633,27 @@ def runTests(dataset, goalName="completion", ignoreData="", name=None):
             responses[str(date)] = []
         numDatePoints = 0
         for index, dataPoint in enumerate(tqdm(data, leave=False)):
-            if saveResponses:
+            if (
+                saveResponses
+                or not (str(date) in responses)
+                or len(responses[str(date)]) <= index
+            ):
+                saveResponses = True
                 response = ragCall(
                     dataPoint["prompt"],
-                    "Transaction" in ignoreData,
-                    "Background" in ignoreData,
+                    not ("Transaction" in ignoreData),
+                    not ("Background" in ignoreData),
                 )
 
                 responses[str(date)].append(response)
+
+                with open(responsesPath, "w") as file:
+                    json.dump(responses, file)
             else:
                 response = responses[str(date)][index]
             print(f"---------------- RESPONSE --------------\n{response}")
+            if response is None:
+                continue
 
             goals = dataPoint[goalName]
             print(f"---------------- GOALS --------------\n{goals}")
