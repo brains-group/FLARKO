@@ -623,11 +623,11 @@ def runTests(dataset, goalName="completion", ignoreData="", name=None):
         if not os.path.exists(responsesFolder):
             os.makedirs(responsesFolder)
 
-    truePositives = defaultdict(lambda: 0)
-    falsePositives = defaultdict(lambda: 0)
-    falseNegatives = defaultdict(lambda: 0)
-    hits = defaultdict(lambda: [0] * 10)
-    mrr = defaultdict(lambda: 0)
+    truePositives = defaultdict(lambda: [])
+    falsePositives = defaultdict(lambda: [])
+    falseNegatives = defaultdict(lambda: [])
+    hits = defaultdict(lambda: [[] for _ in range(10)])
+    mrr = defaultdict(lambda: [])
     numDatapoints = 0
     for date, data in tqdm(dataset.items()):
         if saveResponses:
