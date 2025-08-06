@@ -504,6 +504,7 @@ def format_qwen_chat_template(input_dict: dict, tokenizer) -> str:
 
 def ragCall(
     prompts,
+    parallel: bool =False,
     getTransactionData: bool = True,
     getMarketData: bool = True,
 ):
@@ -542,7 +543,7 @@ def ragCall(
         return None
 
     retrieved_assets = (
-        ((create_asset_query | retriever_assets | get_jsonld_from_docs)).invoke(
+        ((((lambda inputs: user_prompt) if parallel else create_asset_query) | retriever_assets | get_jsonld_from_docs)).invoke(
             {
                 "user_question": user_prompt,
                 "transactions_jsonld": getTransactionData,
@@ -598,7 +599,7 @@ def ragCall(
 # =============================================================================
 
 
-def runTests(dataset, goalName="completion", ignoreData="", name=None):
+def runTests(dataset, goalName="completion", parallel=False, ignoreData="", name=None):
     if name is None:
         name = (
             "RAG_"
@@ -642,6 +643,7 @@ def runTests(dataset, goalName="completion", ignoreData="", name=None):
                 saveResponses = True
                 response = ragCall(
                     dataPoint["prompt"],
+                    parallel,
                     not ("Transaction" in ignoreData),
                     not ("Background" in ignoreData),
                 )
@@ -819,6 +821,13 @@ print("Performing Adherence Test:")
 print("Scores: {}".format(runTests(testDataset, "futurePurchases")))
 print("Performing Profit Test:")
 print("Scores: {}".format(runTests(testDataset, "profitableAssets")))
+print("Performing Parallel Test:")
+print("Performing Overall Test:")
+print("Scores: {}".format(runTests(testDataset, "completion", True)))
+print("Performing Adherence Test:")
+print("Scores: {}".format(runTests(testDataset, "futurePurchases", True)))
+print("Performing Profit Test:")
+print("Scores: {}".format(runTests(testDataset, "profitableAssets", True)))
 # print("Performing no Background Test:")
 # print("Performing Overall Test:")
 # print("Scores: {}".format(runTests(testDataset, "completion", "Background")))
