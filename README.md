@@ -18,7 +18,6 @@ FLARKO is a framework specifically designed for financial asset recommendation s
 
 - [Installation](#installation)
 - [Quick Start](#quick-start)
-- [Architecture](#architecture)
 - [Data Preparation](#data-preparation)
 - [Training](#training)
 - [Evaluation](#evaluation)
@@ -72,57 +71,7 @@ python train.py --cfg_file federated_full --num_rounds 200
 
 ```bash
 # Evaluate trained models
-python test.py --base_model_path Qwen/Qwen3-4B --lora_path ./models/your_model
-```
-
-## Architecture
-
-
-### Knowledge Graph Architecture
-
-```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   User Query    │───▶│  Knowledge Graph│───▶│  Asset Context  │
-│                 │    │  Optimization    │    │  Extraction     │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-                                │                       │
-                                ▼                       ▼
-                    ┌─────────────────┐    ┌─────────────────┐
-                    │ Transaction KG  │    │ Background KG   │
-                    │ (User History)  │    │ (Market Data)   │
-                    └─────────────────┘    └─────────────────┘
-                                │                       │
-                                └───────────┬───────────┘
-                                            ▼
-                    ┌─────────────────────────────────────────┐
-                    │         Optimized Context              │
-                    │     (Structured Knowledge)            │
-                    └─────────────────┬─────────────────────┘
-                                      ▼
-                    ┌─────────────────────────────────────────┐
-                    │         LLM Generation                │
-                    │    (Financial Recommendations)         │
-                    └─────────────────────────────────────────┘
-```
-
-### Federated Learning Pipeline
-
-```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Client 1      │    │   Client 2      │    │   Client N      │
-│  (Local Data)   │    │  (Local Data)   │    │  (Local Data)   │
-└─────────┬───────┘    └─────────┬───────┘    └─────────┬───────┘
-          │                      │                      │
-          └──────────────────────┼──────────────────────┘
-                                 │
-                    ┌─────────────▼─────────────┐
-                    │      Flower Server        │
-                    │   (Aggregation Logic)     │
-                    └─────────────┬─────────────┘
-                                  │
-                    ┌─────────────▼─────────────┐
-                    │   Global Model Update     │
-                    └───────────────────────────┘
+python test.py --base_model_path Qwen/Qwen3-4B --lora_path ./models/path/to/lora/checkpoint
 ```
 
 ## Data Preparation
@@ -132,7 +81,7 @@ python test.py --base_model_path Qwen/Qwen3-4B --lora_path ./models/your_model
 The system uses two main knowledge graphs:
 
 1. **Background Knowledge Graph (non-behavioral knowledge)**: Market data, asset information, historical prices
-2. **Transaction Knowledge Graphs (behavioral knowledge)**: User transaction histories per client
+2. **Transaction Knowledge Graphs (behavioral knowledge)**: Per-user transaction histories
 
 
 ## Training
@@ -140,10 +89,10 @@ The system uses two main knowledge graphs:
 ### LLM Configuration
 
 The chosen LLM can be trained normally by running `centralized_train.py`. The dataset, model, and hyperparameters can be adjusted by editing `centralized_full.yaml` in the `conf` folder.
-Additionally, you can override the base model path by passing a `--base_model_path` argument. You can also override the dataset name used by passing the `--dataset_name` argument, and you can pass the `--dataset_index` if you are using a federated dataset and want to train on just one client's data (used for the local training ablation).
+Additionally, you can override the base model path by passing a `--base_model_path` argument. You can also override the dataset name used by passing the `--dataset_name` argument.
 
 The chosen LLM can be trained via a federated simulation by running `train.py`. The dataset, model, and hyperparameters can be adjusted by editing `federated_full.yaml` in the `conf` folder.
-Additionally, you can override the base model path by passing a `--base_model_path` argument, and you can override the number of federated training rounds by passing the `--num_rounds` argument (useful for resuming from a checkpoint). You can also override the dataset name used by passing the `--dataset_name` argument.
+Additionally, you can override the base model path or lora path by passing the `--base_model_path` or `--lora_path` arguments, respectively, and you can override the number of federated training rounds by passing the `--num_rounds` argument (useful for resuming from a checkpoint). You can also override the dataset name used by passing the `--dataset_name` argument.
 
 Available configurations in `conf/`:
 
@@ -202,7 +151,7 @@ python train.py \
   --dataset_name finDataset
 ```
 
-### Training Configuration
+### Federated Training Configuration
 
 Key parameters in configuration files:
 
@@ -228,19 +177,6 @@ flower:
     num_gpus: 1.0
 ```
 
-### Usage Example
-
-```python
-# Extract relevant subgraph for user
-user_subgraph = getCustomerSubgraphUntilDate(user_id, current_date)
-
-# Get background market data
-background_subgraph = getBackgroundSubgraphUntilDate(current_date)
-
-# Optimize context for LLM
-optimized_context = serialize_to_jsonld(user_subgraph, background_subgraph)
-```
-
 ## Evaluation
 
 ### Metrics
@@ -255,12 +191,12 @@ Performance is measured using **Hits@3**, with three evaluation variants:
 
 ```bash
 # Test model performance
-python test.py --base_model_path Qwen/Qwen3-4B --lora_path ./models/your_model
+python test.py --base_model_path Qwen/Qwen3-4B --lora_path ./models/path/to/lora/checkpoint
 ```
 
 ### Evaluation Output
 
-**Performance of FLARKO across different model sizes and input configurations**
+**Performance of CenFLARKO across different model sizes and input configurations**
 *Results are presented as mean ± standard error of a proportion. The best results for each model are in **bold**, and the best overall are marked with an ↑.*
 
 |          Model | Data     |        Pref\@3       |        Prof\@3       |        Comb\@3       |
