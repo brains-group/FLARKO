@@ -609,6 +609,8 @@ def runTests(dataset, goalName="completion", parallel=False, ignoreData="", name
                 if args.lora_path is not None
                 else ""
             )
+            + "_"
+            + str(parallel)
             + "_ignore"
             + ignoreData
         )
