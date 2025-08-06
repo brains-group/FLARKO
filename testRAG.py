@@ -11,8 +11,8 @@ from rdflib.namespace import XSD
 from datetime import datetime
 from itertools import chain
 import yaml
-import subprocess
 from pathlib import Path
+from typing import List, Dict
 
 sys.path.append("../../")
 sys.path.append("../../../")
@@ -26,13 +26,20 @@ import pandas as pd
 from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from graphrag.query.llm.text_utils import num_tokens
-from graphrag.query.context_builder.conversation_history import ConversationHistory
-from graphrag.query.structured_search.local_search.search import LocalSearch
-from graphrag.language_model.manager import ModelManager
-from graphrag.cli.index import index_cli
-from graphrag.config.enums import IndexingMethod
-from graphrag.language_model.protocol.base import ChatModel
+
+from langchain_core.retrievers import BaseRetriever
+from langchain_core.callbacks import CallbackManagerForRetrieverRun
+from langchain_core.documents import Document
+from langchain_core.language_models import BaseLanguageModel
+from langchain_core.prompts import (
+    ChatPromptTemplate,
+    SystemMessagePromptTemplate,
+    HumanMessagePromptTemplate,
+    PromptTemplate,
+)
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.runnables import RunnableLambda
 
 
 # from graphrag.query.structured_search.global_search.community_reports import (
@@ -47,12 +54,12 @@ random.seed(2025)
 parser = argparse.ArgumentParser()
 parser.add_argument("--base_model_path", type=str, default="Qwen/Qwen3-0.6B")
 parser.add_argument("--lora_path", type=str, default=None)
-parser.add_argument("--smaller", action=argparse.BooleanOptionalAction)
+parser.add_argument("--divide", type=int, default=None)
 args = parser.parse_args()
 print(args)
 
 # =============================================================================
-# PART 1: DATA PREPARATION (RDFLib to CSV)
+# PART 1: DATA PREPARATION
 # =============================================================================
 
 # Define your namespaces
@@ -65,8 +72,69 @@ ISIN_PREFIX = "urn:isin:"
 SECURITY = Namespace(SECURITY_PREFIX + "ns#")
 SCHEMA = Namespace("http://schema.org/")
 
+backgroundContext = {
+    "@vocab": str(SECURITY),
+    "schema": str(SCHEMA),
+    "xsd": str(XSD),
+    "name": "schema:name",
+    "identifier": "schema:identifier",
+    "sector": "schema:sector",
+    "industry": "schema:industry",
+    "price": {"@id": "schema:price", "@type": "xsd:decimal"},
+    "datePublished": {"@id": "schema:datePublished", "@type": "xsd:date"},
+    "priceOf": {"@type": "@id"},
+}
 
-def getCustomerSubgraphUntilDate(graph: Graph, endDate: str) -> Graph:
+transactionContext = {
+    "@vocab": str(SECURITY),
+    "schema": str(SCHEMA),
+    "transactions:": TRANSACTIONS_PREFIX,
+    "users:": USER_PREFIX,
+    # "prices:": PRICE_PREFIX,
+    "summary:": SUMMARY_PREFIX,
+    "isin:": ISIN_PREFIX,
+    "xsd": str(XSD),
+    "transactionValue": {"@type": "xsd:decimal"},
+    # Define the datatype for your date predicate
+    "transactionDate": {"@id": "security:transactionDate", "@type": "xsd:date"},
+    "hasParticipant": {"@type": "@id"},
+    "involvesSecurity": {"@type": "@id"},
+}
+
+
+# KG 1: Market Data
+with open("./data/backgroundGraph.pkl", "rb") as file:
+    backgroundKG = pickle.load(file)
+# with open("./backgroundGraphExample.json", "w") as file:
+#     file.write(
+#         backgroundKG.serialize(format="json-ld", context=backgroundContext, indent=2)
+#     )
+
+# KG 2: Transaction History
+with open("./data/clients.pkl", "rb") as file:
+    clients = pickle.load(file)
+# with open("./transactionGraphExample.json", "w") as file:
+#     file.write(
+#         clients[0][0].serialize(format="json-ld", context=transactionContext, indent=2)
+#     )
+# sys.exit()
+transactionKGs = {
+    next(transactionKG[: RDF.type : SECURITY.User]): transactionKG
+    for client in clients
+    for transactionKG in client
+}
+
+
+customerSubgraphCache = {}
+backgroundSubgraphCache = {}
+
+
+def getCustomerSubgraphUntilDate(user: str, endDate: str) -> Graph:
+    global customerSubgraphCache, transactionKGs
+    idStr = user + "_" + endDate
+    if idStr in customerSubgraphCache:
+        return customerSubgraphCache[idStr]
+    graph = transactionKGs[user]
     subgraph = Graph()
     subgraph.bind("stock", SECURITY)
     subgraph.bind("schema", SCHEMA)
@@ -82,10 +150,7 @@ def getCustomerSubgraphUntilDate(graph: Graph, endDate: str) -> Graph:
         )
     )
 
-    for transactionURI in random.sample(
-        datapoints,
-        len(datapoints),
-    ):
+    for transactionURI in datapoints:
         priceDate = next(
             graph[transactionURI : SECURITY.transactionTimestamp :]
         ).toPython()
@@ -107,7 +172,11 @@ def getCustomerSubgraphUntilDate(graph: Graph, endDate: str) -> Graph:
     return subgraph
 
 
-def getBackgroundSubgraphUntilDate(graph: Graph, endDate: str) -> Graph:
+def getBackgroundSubgraphUntilDate(endDate: str) -> Graph:
+    global backgroundSubgraphCache, backgroundKG
+    if endDate in backgroundSubgraphCache:
+        return backgroundSubgraphCache[endDate]
+    graph = backgroundKG
     subgraph = Graph()
     subgraph.bind("stock", SECURITY)
     subgraph.bind("schema", SCHEMA)
@@ -118,7 +187,7 @@ def getBackgroundSubgraphUntilDate(graph: Graph, endDate: str) -> Graph:
 
     datapoints = list(graph[: RDF.type : SECURITY.TenWeekPriceSummary])
 
-    for priceObservation in random.sample(datapoints, len(datapoints)):
+    for priceObservation in datapoints:
         priceDate = next(graph[priceObservation : SECURITY.periodEndDate :]).toPython()
 
         if priceDate <= endDate.date():
@@ -131,92 +200,80 @@ def getBackgroundSubgraphUntilDate(graph: Graph, endDate: str) -> Graph:
                     subgraph.add((s, p, o))
                 addedSecurities.add(securityURI)
 
+    backgroundSubgraphCache[endDate] = subgraph
     return subgraph
 
 
-# KG 1: Market Data
-with open("./data/backgroundGraph.pkl", "rb") as file:
-    backgroundKG = pickle.load(file)
-
-# KG 2: Transaction History
-with open("./data/clients.pkl", "rb") as file:
-    clients = pickle.load(file)
-transactionKGs = {
-    next(transactionKG[: RDF.type : SECURITY.User]): transactionKG
-    for client in clients
-    for transactionKG in client
-}
-
-BACKGROUND_KG_INPUT_DIR = "./data/GraphRAG/backgroundGraphs/"
-TRANSACTION_KGs_INPUT_DIR = "./data/GraphRAG/transactionGraphs/"
+# BACKGROUND_KG_INPUT_DIR = "./data/GraphRAG/backgroundGraphs/"
+# TRANSACTION_KGs_INPUT_DIR = "./data/GraphRAG/transactionGraphs/"
 
 
-def getBackgroundDir(dateString):
-    path = BACKGROUND_KG_INPUT_DIR + "/" + dateString
-    os.makedirs(path, exist_ok=True)
-    return path
+# def getBackgroundDir(dateString):
+#     path = BACKGROUND_KG_INPUT_DIR + "/" + dateString
+#     os.makedirs(path, exist_ok=True)
+#     return path
 
 
-def getTransactionDir(dateString, user):
-    path = TRANSACTION_KGs_INPUT_DIR + "/" + dateString + "/" + user
-    os.makedirs(path, exist_ok=True)
-    return path
+# def getTransactionDir(dateString, user):
+#     path = TRANSACTION_KGs_INPUT_DIR + "/" + dateString + "/" + user
+#     os.makedirs(path, exist_ok=True)
+#     return path
 
 
-def prepareCSVDataForDate(dateString: str, user: str):
-    global backgroundKG, transactionKGs
+# def prepareCSVDataForDate(dateString: str, user: str):
+#     global backgroundKG, transactionKGs
 
-    def convertKGtoGraphRAGFormat(dir_path, kg):
-        os.makedirs(dir_path, exist_ok=True)
-        entities = {}
-        relationships = []
+#     def convertKGtoGraphRAGFormat(dir_path, kg):
+#         os.makedirs(dir_path, exist_ok=True)
+#         entities = {}
+#         relationships = []
 
-        for s, p, o in kg:
-            source_id, target_id = str(s), str(o)
-            s_splitter = "/" if "/" in s else ":"
-            o_splitter = "/" if "/" in o else ":"
-            p_splitter = "/" if "/" in p else ":"
-            if source_id not in entities:
-                entities[source_id] = {
-                    "id": source_id,
-                    "title": s.split(s_splitter)[-1],
-                }
-            if isinstance(o, URIRef) and target_id not in entities:
-                entities[target_id] = {
-                    "id": target_id,
-                    "title": o.split(o_splitter)[-1],
-                }
-            elif isinstance(o, Literal):
-                entities[source_id][p.split(p_splitter)[-1]] = str(o)
-            if isinstance(o, URIRef):
-                relationships.append(
-                    {
-                        "source": source_id,
-                        "target": target_id,
-                        "relationship": p.split(p_splitter)[-1],
-                    }
-                )
+#         for s, p, o in kg:
+#             source_id, target_id = str(s), str(o)
+#             s_splitter = "/" if "/" in s else ":"
+#             o_splitter = "/" if "/" in o else ":"
+#             p_splitter = "/" if "/" in p else ":"
+#             if source_id not in entities:
+#                 entities[source_id] = {
+#                     "id": source_id,
+#                     "title": s.split(s_splitter)[-1],
+#                 }
+#             if isinstance(o, URIRef) and target_id not in entities:
+#                 entities[target_id] = {
+#                     "id": target_id,
+#                     "title": o.split(o_splitter)[-1],
+#                 }
+#             elif isinstance(o, Literal):
+#                 entities[source_id][p.split(p_splitter)[-1]] = str(o)
+#             if isinstance(o, URIRef):
+#                 relationships.append(
+#                     {
+#                         "source": source_id,
+#                         "target": target_id,
+#                         "relationship": p.split(p_splitter)[-1],
+#                     }
+#                 )
 
-        pd.DataFrame(list(entities.values())).to_csv(
-            f"{dir_path}/entities.csv", index=False
-        )
-        pd.DataFrame(relationships).to_csv(f"{dir_path}/relationships.csv", index=False)
+#         pd.DataFrame(list(entities.values())).to_csv(
+#             f"{dir_path}/entities.csv", index=False
+#         )
+#         pd.DataFrame(relationships).to_csv(f"{dir_path}/relationships.csv", index=False)
 
-    backgroundPath = getBackgroundDir(dateString)
-    if not os.path.exists(backgroundPath):
-        convertKGtoGraphRAGFormat(
-            backgroundPath, getBackgroundSubgraphUntilDate(backgroundKG, dateString)
-        )
-    if user is not None:
-        transactionPath = getTransactionDir(dateString, user)
-        if not os.path.exists(transactionPath):
-            convertKGtoGraphRAGFormat(
-                transactionPath,
-                getBackgroundSubgraphUntilDate(transactionKGs[user], dateString),
-            )
-    else:
-        transactionPath = None
-    return backgroundPath, transactionPath
+#     backgroundPath = getBackgroundDir(dateString)
+#     if not os.path.exists(backgroundPath):
+#         convertKGtoGraphRAGFormat(
+#             backgroundPath, getBackgroundSubgraphUntilDate(backgroundKG, dateString)
+#         )
+#     if user is not None:
+#         transactionPath = getTransactionDir(dateString, user)
+#         if not os.path.exists(transactionPath):
+#             convertKGtoGraphRAGFormat(
+#                 transactionPath,
+#                 getBackgroundSubgraphUntilDate(transactionKGs[user], dateString),
+#             )
+#     else:
+#         transactionPath = None
+#     return backgroundPath, transactionPath
 
 
 # ============= Extract model name from the path. The name is used for saving results. =============
@@ -250,149 +307,243 @@ if args.lora_path is not None:
 tokenizer = AutoTokenizer.from_pretrained(args.base_model_path, use_fast=False)
 print("Model loaded successfully.")
 
+NODE_IDENTIFICATION_TEMPLATE = """
+Your goal is to select a small, relevant subset of entities from a knowledge graph to help with a financial recommendation task.
+Based on the user's request, identify the most relevant entities from the list provided.
 
-class LLMOutput:
-    """A custom wrapper to use a local Hugging Face model with GraphRAG."""
+Return a comma-separated list of the chosen entity URIs. For example: "ex:asset1, ex:transaction5, ex:asset3"
+Do not return more than 15 entities.
 
-    def __init__(self, response, prompt_tokens, completion_tokens):
-        self.response = response
-        self.prompt_tokens = prompt_tokens
-        self.completion_tokens = completion_tokens
+## Entity List:
+{entity_list}
 
+## User Request:
+"{request}"
 
-class LLMInput:
-    """A custom wrapper to use a local Hugging Face model with GraphRAG."""
-
-    def __init__(self, messages):
-        self.messages = messages
+## Relevant Entity URIs:
+"""
 
 
-# --- Create the Custom Wrapper Class ---
-class HuggingFaceWrapper(ChatModel):
-    """A custom wrapper to use a local Hugging Face model with GraphRAG."""
+def clean_qwen_output(text: str) -> str:
+    """
+    Removes the <think>...</think> block from the Qwen model's output.
+    """
+    # Use a regular expression to find and remove the think block
+    cleaned_text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    # Also strip any leading/trailing whitespace that might be left over
+    return cleaned_text.strip()
 
-    def __init__(self, model, tokenizer):
-        self.model = model
-        self.tokenizer = tokenizer
 
-    def __call__(self, input: LLMInput, clean: bool = True) -> LLMOutput:
-        text = self.tokenizer.apply_chat_template(
-            input.messages, tokenize=False, add_generation_prompt=True
+class SubgraphRetriever(BaseRetriever):
+    """
+    Identifies key entities in a graph based on a request,
+    constructs a subgraph around them, and returns it as JSON-LD.
+    """
+
+    graph: Graph
+    llm: BaseLanguageModel
+    candidate_query: str  # SPARQL query to find candidate nodes
+
+    class Config:
+        arbitrary_types_allowed = True
+
+    def _get_relevant_documents(
+        self, query: str, *, run_manager: CallbackManagerForRetrieverRun
+    ) -> List[Document]:
+
+        # 1. Get a list of all candidate entities using the provided SPARQL query
+        candidate_uris = [str(row.s) for row in self.graph.query(self.candidate_query)]
+        if not candidate_uris:
+            return [
+                Document(page_content="{}")
+            ]  # Return empty JSON-LD if no candidates
+
+        # Define the custom parser to clean the LLM output
+        qwen_parser = RunnableLambda(
+            clean_qwen_output if "Qwen" in args.base_model_path else lambda x: x
         )
 
-        model_inputs = self.tokenizer([text], return_tensors="pt").to(model.device)
+        # 2. Use an LLM to identify the most relevant entities from the list
+        prompt = PromptTemplate.from_template(NODE_IDENTIFICATION_TEMPLATE)
+        node_identification_chain = prompt | self.llm | qwen_parser | StrOutputParser()
 
-        generated_ids = self.model.generate(
-            **model_inputs,
-            max_new_tokens=4096,
+        identified_nodes_str = node_identification_chain.invoke(
+            {"entity_list": "\n".join(candidate_uris), "request": query}
         )
-        generated_ids = [
-            output_ids[len(input_ids) :]
-            for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
+
+        # 3. Programmatically build a CONSTRUCT query for the identified nodes
+        node_list = [
+            f"<{uri.strip()}>" for uri in identified_nodes_str.split(",") if uri.strip()
         ]
+        if not node_list:
+            return [Document(page_content="{}")]
 
-        response = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[
-            0
-        ]
+        # This query constructs a subgraph including all triples where the identified
+        # nodes are either the subject or the object.
+        sparql_construct_query = f"""
+        PREFIX ns: <http://securityTrade.com/ns#>
+        CONSTRUCT {{ ?s ?p ?o }}
+        WHERE {{
+          VALUES ?node {{ {' '.join(node_list)} }}
+          {{ ?node ?p ?o . BIND(?node as ?s) }}
+          UNION
+          {{ ?s ?p ?node . BIND(?node as ?o) }}
+        }}
+        """
 
-        # Clean the <think> blocks from the final generated text
-        if clean:
-            response = re.sub(
-                r"<think>.*?</think>", "", response, flags=re.DOTALL
-            ).strip()
+        # 4. Execute the query to get the subgraph
+        subgraph = self.graph.query(sparql_construct_query).graph
+        if not subgraph:
+            return [Document(page_content="{}")]
 
-        return LLMOutput(
-            response=response,
-            prompt_tokens=num_tokens(text),
-            completion_tokens=num_tokens(response),
-        )
+        # 5. Serialize the subgraph to JSON-LD and return as a single Document
+        jsonld_output = subgraph.serialize(format="json-ld", indent=None)
+        return [Document(page_content=jsonld_output)]
 
 
-# =============================================================================
-# PART 3: GRAPHRAG SETUP & INDEXING
-# =============================================================================
-rootGraphRAGDir = "./graphRAG"
-os.makedirs(rootGraphRAGDir, exist_ok=True)
+# class LLMOutput:
+#     """A custom wrapper to use a local Hugging Face model with GraphRAG."""
+
+#     def __init__(self, response, prompt_tokens, completion_tokens):
+#         self.response = response
+#         self.prompt_tokens = prompt_tokens
+#         self.completion_tokens = completion_tokens
 
 
-def setup_and_run_indexing(dateString, user):
-    """Creates config files and runs the GraphRAG indexing process."""
-    print("--- Part 3: Setting up and running GraphRAG indexing ---")
-    backgroundInputPath, transactionInputPath = prepareCSVDataForDate(dateString, user)
-    backgroundOutputPath = backgroundInputPath.replace("./data", rootGraphRAGDir)
-    transactionOutputPath = transactionInputPath.replace("./data", rootGraphRAGDir)
-    configs = {
-        "transaction_kg_{}_{}.yml".format(dateString, user): {
-            "input_dir": transactionInputPath,
-            "output_dir": transactionOutputPath,
-        },
-        "background_kg_{}.yml".format(dateString): {
-            "input_dir": backgroundInputPath,
-            "output_dir": backgroundOutputPath,
-        },
-    }
-    for filename, paths in configs.items():
-        fileDir = "./conf/GraphRAG/"
-        filePath = fileDir + filename
-        config_data = {
-            "llm": {
-                "type": "static_response",
-                "response": "This is a mock response for indexing.",
-            },
-            "storage": {"type": "file", "base_dir": paths["output_dir"]},
-            "input": {
-                "type": "file",
-                "base_dir": paths["input_dir"],
-                "entity": {
-                    "file_type": "csv",
-                    "source": "entities.csv",
-                    "id": "id",
-                    "title": "title",
-                },
-                "relationship": {
-                    "file_type": "csv",
-                    "source": "relationships.csv",
-                    "source_id": "source",
-                    "target_id": "target",
-                },
-            },
-        }
-        if not os.path.exists(filePath):
-            os.makedirs(fileDir, exist_ok=True)
-            os.makedirs(paths["output_dir"], exist_ok=True)
-            with open(filePath, "w") as f:
-                yaml.dump(config_data, f)
+# class LLMInput:
+#     """A custom wrapper to use a local Hugging Face model with GraphRAG."""
 
-            print(f"Running indexing for {filePath}...")
-            index_cli(
-                Path(rootGraphRAGDir),
-                IndexingMethod.Standard,
-                False,
-                False,
-                False,
-                Path(filePath),
-                False,
-                True,
-                Path(paths["output_dir"]),
-            )
-            # subprocess.run(
-            #     [
-            #         "graphrag",
-            #         "index",
-            #         "--root",
-            #         ".",
-            #         "-c",
-            #         filePath,
-            #     ],
-            #     check=True,
-            # )
-    print("Indexing complete for all graphs.\n")
-    return backgroundOutputPath, transactionOutputPath
+#     def __init__(self, messages):
+#         self.messages = messages
+
+
+# # --- Create the Custom Wrapper Class ---
+# class HuggingFaceWrapper(ChatModel):
+#     """A custom wrapper to use a local Hugging Face model with GraphRAG."""
+
+#     def __init__(self, model, tokenizer):
+#         self.model = model
+#         self.tokenizer = tokenizer
+
+#     def __call__(self, input: LLMInput, clean: bool = True) -> LLMOutput:
+#         text = self.tokenizer.apply_chat_template(
+#             input.messages, tokenize=False, add_generation_prompt=True
+#         )
+
+#         model_inputs = self.tokenizer([text], return_tensors="pt").to(model.device)
+
+#         generated_ids = self.model.generate(
+#             **model_inputs,
+#             max_new_tokens=4096,
+#         )
+#         generated_ids = [
+#             output_ids[len(input_ids) :]
+#             for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
+#         ]
+
+#         response = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[
+#             0
+#         ]
+
+#         # Clean the <think> blocks from the final generated text
+#         if clean:
+#             response = re.sub(
+#                 r"<think>.*?</think>", "", response, flags=re.DOTALL
+#             ).strip()
+
+#         return LLMOutput(
+#             response=response,
+#             prompt_tokens=num_tokens(text),
+#             completion_tokens=num_tokens(response),
+#         )
+
+
+# # =============================================================================
+# # PART 3: GRAPHRAG SETUP & INDEXING
+# # =============================================================================
+# rootGraphRAGDir = "./graphRAG"
+# os.makedirs(rootGraphRAGDir, exist_ok=True)
+
+
+# def setup_and_run_indexing(dateString, user):
+#     """Creates config files and runs the GraphRAG indexing process."""
+#     print("--- Part 3: Setting up and running GraphRAG indexing ---")
+#     backgroundInputPath, transactionInputPath = prepareCSVDataForDate(dateString, user)
+#     backgroundOutputPath = backgroundInputPath.replace("./data", rootGraphRAGDir)
+#     transactionOutputPath = transactionInputPath.replace("./data", rootGraphRAGDir)
+#     configs = {
+#         "transaction_kg_{}_{}.yml".format(dateString, user): {
+#             "input_dir": transactionInputPath,
+#             "output_dir": transactionOutputPath,
+#         },
+#         "background_kg_{}.yml".format(dateString): {
+#             "input_dir": backgroundInputPath,
+#             "output_dir": backgroundOutputPath,
+#         },
+#     }
+#     for filename, paths in configs.items():
+#         fileDir = "./conf/GraphRAG/"
+#         filePath = fileDir + filename
+#         config_data = {
+#             "llm": {
+#                 "type": "static_response",
+#                 "response": "This is a mock response for indexing.",
+#             },
+#             "storage": {"type": "file", "base_dir": paths["output_dir"]},
+#             "input": {
+#                 "type": "file",
+#                 "base_dir": paths["input_dir"],
+#                 "entity": {
+#                     "file_type": "csv",
+#                     "source": "entities.csv",
+#                     "id": "id",
+#                     "title": "title",
+#                 },
+#                 "relationship": {
+#                     "file_type": "csv",
+#                     "source": "relationships.csv",
+#                     "source_id": "source",
+#                     "target_id": "target",
+#                 },
+#             },
+#         }
+#         if not os.path.exists(filePath):
+#             os.makedirs(fileDir, exist_ok=True)
+#             os.makedirs(paths["output_dir"], exist_ok=True)
+#             with open(filePath, "w") as f:
+#                 yaml.dump(config_data, f)
+
+#             print(f"Running indexing for {filePath}...")
+#             index_cli(
+#                 Path(rootGraphRAGDir),
+#                 IndexingMethod.Standard,
+#                 False,
+#                 False,
+#                 False,
+#                 Path(filePath),
+#                 False,
+#                 True,
+#                 Path(paths["output_dir"]),
+#             )
+#             # subprocess.run(
+#             #     [
+#             #         "graphrag",
+#             #         "index",
+#             #         "--root",
+#             #         ".",
+#             #         "-c",
+#             #         filePath,
+#             #     ],
+#             #     check=True,
+#             # )
+#     print("Indexing complete for all graphs.\n")
+#     return backgroundOutputPath, transactionOutputPath
 
 
 # =============================================================================
 # PART 4: DYNAMIC RAG PIPELINE
 # =============================================================================
+
 SYSTEM_PROMPT_TASK = """You are an expert financial analyst AI. Your task is to analyze a user's transaction history and supplementary market data to provide personalized asset recommendations. The user will ask for recommendations for the next 6 months from a given "current date".
 
 You MUST provide your response in the following format, and only this format:
@@ -400,108 +551,207 @@ You MUST provide your response in the following format, and only this format:
 - [ASSET_ISIN_1]
 - [ASSET_ISIN_2]
 - [ASSET_ISIN_3]"""
-SYSTEM_PROMPT_BACKGROUND = """Here is the supplementary data with asset information and historical prices:
+SYSTEM_PROMPT_BACKGROUND = """Here is the supplementary knowledge graph with asset information and historical prices in JSON-LD format:
 
-```
-{}
+```jsonld
+{assets_jsonld}
 ```"""
-SYSTEM_PROMPT_TRANSACTION = """Here is the user's transaction history:
+SYSTEM_PROMPT_TRANSACTION = """Here is the user's transaction history in JSON-LD format:
 
-```
-{}
+```jsonld
+{transactions_jsonld}
 ```"""
 
+# --- Setup ---
+# Assume 'llm', 'retrieval_llm', 'transactions_graph', 'assets_graph' are loaded
 
-def setup_query_engine(storage_dir: str, llm_wrapper):
-    """Loads an indexed graph and sets up its query engine."""
-    engine = LocalSearch(
-        llm=llm_wrapper,
-        context_builder=GlobalCommunityReports(
-            llm=llm_wrapper,
-            community_reports=None,
-            conversation_history=ConversationHistory(max_turns=5),
-        ),
-        community_level=2,
-        response_type="multiple paragraphs",
-    )
-    engine.load_context(storage_dir)
-    return engine
+# 1. Define the SPARQL queries to find candidate nodes for each graph
+TRANSACTIONS_CANDIDATE_QUERY = """
+    PREFIX ns: <http://securityTrade.com/ns#>
+    SELECT ?s WHERE {
+      { ?s a ns:BuyTransaction } UNION { ?s a ns:SellTransaction }
+    }
+"""
 
-
-def generate_search_query(user_prompt: str, llm_wrapper) -> str:
-    """Uses the LLM to distill a user prompt into a concise search query."""
-    messages = [
-        {
-            "role": "system",
-            "content": "You are an expert at creating search queries. Given a user's request, extract the core intent into a short query for a financial knowledge graph.",
-        },
-        {"role": "user", "content": user_prompt},
-    ]
-    llm_input = LLMInput(messages=messages)
-    response = llm_wrapper(llm_input)
-    return response.response
+ASSETS_CANDIDATE_QUERY = """
+    PREFIX ns: <http://securityTrade.com/ns#>
+    SELECT ?s WHERE {
+      ?s a ns:TenWeekPriceSummary
+    }
+"""
 
 
-llm_wrapper = HuggingFaceWrapper(model, tokenizer)
+# --- Define the Sequential Chain ---
 
 
-def run_financial_query(
-    prompts: list,
+def get_jsonld_from_docs(docs: List[Document]) -> str:
+    return docs[0].page_content if docs else "{}"
+
+
+def create_asset_query(input: dict) -> str:
+    """Creates a new query for the asset retriever, combining the original question
+    with the context from the retrieved transaction history."""
+    return f"""
+    Original user question: '{input["user_question"]}'
+    
+    Context from the user's transaction history is provided below. Identify the securities (ISINs) involved
+    and find the most relevant price history for them to help answer the original question.
+    
+    Transaction History:
+    {input["transactions_jsonld"]} 
+    """
+
+
+def ragCall(
+    prompts,
     getTransactionData: bool = True,
     getMarketData: bool = True,
 ):
-    global llm_wrapper
+    global model
     user_prompt = prompts[-1]["content"]
     currentDate = re.search(r"current date is ([^,]+),", user_prompt).group(1)
     userSearch = re.search(r"users::([^\"]+)\"", prompts[2]["content"])
     user = userSearch.group(1) if userSearch else None
-    backgroundOutputPath, transactionOutputPath = setup_and_run_indexing(
-        currentDate, user
+
+    transactions_graph = getCustomerSubgraphUntilDate(user, currentDate)
+    assets_graph = getBackgroundSubgraphUntilDate(currentDate)
+
+    retriever_transactions = SubgraphRetriever(
+        graph=transactions_graph,
+        llm=model,
+        candidate_query=TRANSACTIONS_CANDIDATE_QUERY,
+    )
+    retriever_assets = SubgraphRetriever(
+        graph=assets_graph, llm=model, candidate_query=ASSETS_CANDIDATE_QUERY
     )
 
-    """Runs the full two-step RAG pipeline."""
-    print("--- Part 4: Executing Dynamic RAG Pipeline ---")
-
-    # 1. Generate the initial search query from the user's prompt
-    initial_query = generate_search_query(user_prompt, llm_wrapper)
-    print(f"Dynamically generated search query: '{initial_query}'")
-
-    if user is not None and getTransactionData:
-        # 2. First Retrieval (Transaction History) - STEP 1
-        transaction_engine = setup_query_engine(transactionOutputPath, llm_wrapper)
-        print("\n-> Step 1: Retrieving from Transaction History KG...")
-        response_transactions = transaction_engine.run(initial_query)
-        context_transactions = response_transactions.response
-    else:
-        context_transactions = "Empty"
-
-    if getMarketData:
-        # 3. Second Retrieval (Market Data) - STEP 2
-        market_engine = setup_query_engine(backgroundOutputPath, llm_wrapper)
-        print("-> Step 2: Retrieving from Market Data KG...")
-        # Augment the query with context from the user's transaction history
-        augmented_query = f"{initial_query}\n\nRelevant transaction history context: {context_transactions}"
-        response_market = market_engine.run(augmented_query)
-        context_market = response_market.response
-    else:
-        context_market = "Empty"
-
-    # 4. Final Prompt Assembly and Generation
-    print("-> Step 3: Assembling final prompt and generating answer...")
-
-    final_messages = [
-        {"role": "system", "content": SYSTEM_PROMPT_TASK},
-        {"role": "system", "content": SYSTEM_PROMPT_BACKGROUND.format(context_market)},
+    rag_chain = (
         {
-            "role": "system",
-            "content": SYSTEM_PROMPT_TRANSACTION.format(context_transactions),
-        },
-        {"role": "user", "content": user_prompt},
-    ]
+            "transactions_jsonld": (
+                (
+                    (lambda inputs: inputs["user_question"])
+                    | retriever_transactions
+                    | get_jsonld_from_docs
+                )
+                if getTransactionData
+                else "Empty"
+            ),
+            "user_question": (lambda inputs: inputs["user_question"]),
+        }
+        | RunnablePassthrough.assign(
+            assets_jsonld=(
+                (create_asset_query | retriever_assets | get_jsonld_from_docs)
+                if getMarketData
+                else "Empty"
+            )
+        )
+        | ChatPromptTemplate.from_messages(
+            [
+                ("system", SYSTEM_PROMPT_TASK),
+                ("system", SYSTEM_PROMPT_BACKGROUND),
+                ("system", SYSTEM_PROMPT_TRANSACTION),
+                ("human", "{user_question}"),
+            ]
+        )
+        | model
+        | StrOutputParser()
+    )
 
-    final_input = LLMInput(messages=final_messages)
-    final_response = llm_wrapper(final_input, clean=False)
-    return final_response.response
+    response = rag_chain.invoke({"user_question": user_prompt})
+
+    return response
+
+
+# def setup_query_engine(storage_dir: str, llm_wrapper):
+#     """Loads an indexed graph and sets up its query engine."""
+#     engine = LocalSearch(
+#         llm=llm_wrapper,
+#         context_builder=GlobalCommunityReports(
+#             llm=llm_wrapper,
+#             community_reports=None,
+#             conversation_history=ConversationHistory(max_turns=5),
+#         ),
+#         community_level=2,
+#         response_type="multiple paragraphs",
+#     )
+#     engine.load_context(storage_dir)
+#     return engine
+
+
+# def generate_search_query(user_prompt: str, llm_wrapper) -> str:
+#     """Uses the LLM to distill a user prompt into a concise search query."""
+#     messages = [
+#         {
+#             "role": "system",
+#             "content": "You are an expert at creating search queries. Given a user's request, extract the core intent into a short query for a financial knowledge graph.",
+#         },
+#         {"role": "user", "content": user_prompt},
+#     ]
+#     llm_input = LLMInput(messages=messages)
+#     response = llm_wrapper(llm_input)
+#     return response.response
+
+
+# llm_wrapper = HuggingFaceWrapper(model, tokenizer)
+
+
+# def run_financial_query(
+#     prompts: list,
+#     getTransactionData: bool = True,
+#     getMarketData: bool = True,
+# ):
+#     global llm_wrapper
+#     user_prompt = prompts[-1]["content"]
+#     currentDate = re.search(r"current date is ([^,]+),", user_prompt).group(1)
+#     userSearch = re.search(r"users::([^\"]+)\"", prompts[2]["content"])
+#     user = userSearch.group(1) if userSearch else None
+#     backgroundOutputPath, transactionOutputPath = setup_and_run_indexing(
+#         currentDate, user
+#     )
+
+#     """Runs the full two-step RAG pipeline."""
+#     print("--- Part 4: Executing Dynamic RAG Pipeline ---")
+
+#     # 1. Generate the initial search query from the user's prompt
+#     initial_query = generate_search_query(user_prompt, llm_wrapper)
+#     print(f"Dynamically generated search query: '{initial_query}'")
+
+#     if user is not None and getTransactionData:
+#         # 2. First Retrieval (Transaction History) - STEP 1
+#         transaction_engine = setup_query_engine(transactionOutputPath, llm_wrapper)
+#         print("\n-> Step 1: Retrieving from Transaction History KG...")
+#         response_transactions = transaction_engine.run(initial_query)
+#         context_transactions = response_transactions.response
+#     else:
+#         context_transactions = "Empty"
+
+#     if getMarketData:
+#         # 3. Second Retrieval (Market Data) - STEP 2
+#         market_engine = setup_query_engine(backgroundOutputPath, llm_wrapper)
+#         print("-> Step 2: Retrieving from Market Data KG...")
+#         # Augment the query with context from the user's transaction history
+#         augmented_query = f"{initial_query}\n\nRelevant transaction history context: {context_transactions}"
+#         response_market = market_engine.run(augmented_query)
+#         context_market = response_market.response
+#     else:
+#         context_market = "Empty"
+
+#     # 4. Final Prompt Assembly and Generation
+#     print("-> Step 3: Assembling final prompt and generating answer...")
+
+#     final_messages = [
+#         {"role": "system", "content": SYSTEM_PROMPT_TASK},
+#         {"role": "system", "content": SYSTEM_PROMPT_BACKGROUND.format(context_market)},
+#         {
+#             "role": "system",
+#             "content": SYSTEM_PROMPT_TRANSACTION.format(context_transactions),
+#         },
+#         {"role": "user", "content": user_prompt},
+#     ]
+
+#     final_input = LLMInput(messages=final_messages)
+#     final_response = llm_wrapper(final_input, clean=False)
+#     return final_response.response
 
 
 # =============================================================================
@@ -546,7 +796,7 @@ def runTests(dataset, goalName="completion", ignoreData="", name=None):
         numDatePoints = 0
         for index, dataPoint in enumerate(tqdm(data, leave=False)):
             if saveResponses:
-                response = run_financial_query(
+                response = ragCall(
                     dataPoint["prompt"],
                     "Transaction" in ignoreData,
                     "Background" in ignoreData,
@@ -678,30 +928,32 @@ def runTests(dataset, goalName="completion", ignoreData="", name=None):
 dataPath = "./data/testFinDatasetSmall.json"
 with open(dataPath, "r") as file:
     testDataset = json.load(file)
-    if args.smaller:
-        testDataset = {
-            date: random.sample(data, math.ceil(len(data) / 10))
-            for date, data in testDataset.items()
-        }
-    testDataset = {date: random.sample(data, 1) for date, data in testDataset.items()}
-    print("Performing Hybrid Test:")
-    print("Performing Overall Test:")
-    print("Scores: {}".format(runTests(testDataset, "completion")))
-    print("Performing Adherence Test:")
-    print("Scores: {}".format(runTests(testDataset, "futurePurchases")))
-    print("Performing Profit Test:")
-    print("Scores: {}".format(runTests(testDataset, "profitableAssets")))
-    # print("Performing no Background Test:")
-    # print("Performing Overall Test:")
-    # print("Scores: {}".format(runTests(testDataset, "completion", "Background")))
-    # print("Performing Adherence Test:")
-    # print("Scores: {}".format(runTests(testDataset, "futurePurchases", "Background")))
-    # print("Performing Profit Test:")
-    # print("Scores: {}".format(runTests(testDataset, "profitableAssets", "Background")))
-    # print("Performing no Transaction Test:")
-    # print("Performing Overall Test:")
-    # print("Scores: {}".format(runTests(testDataset, "completion", "Transaction")))
-    # print("Performing Adherence Test:")
-    # print("Scores: {}".format(runTests(testDataset, "futurePurchases", "Transaction")))
-    # print("Performing Profit Test:")
-    # print("Scores: {}".format(runTests(testDataset, "profitableAssets", "Transaction")))
+for data in testDataset.values():
+    random.shuffle(data)
+if args.divide:
+    testDataset = {
+        date: data[: math.ceil(len(data) / args.divide)]
+        for date, data in testDataset.items()
+    }
+testDataset = {date: random.sample(data, 1) for date, data in testDataset.items()}
+print("Performing Hybrid Test:")
+print("Performing Overall Test:")
+print("Scores: {}".format(runTests(testDataset, "completion")))
+print("Performing Adherence Test:")
+print("Scores: {}".format(runTests(testDataset, "futurePurchases")))
+print("Performing Profit Test:")
+print("Scores: {}".format(runTests(testDataset, "profitableAssets")))
+# print("Performing no Background Test:")
+# print("Performing Overall Test:")
+# print("Scores: {}".format(runTests(testDataset, "completion", "Background")))
+# print("Performing Adherence Test:")
+# print("Scores: {}".format(runTests(testDataset, "futurePurchases", "Background")))
+# print("Performing Profit Test:")
+# print("Scores: {}".format(runTests(testDataset, "profitableAssets", "Background")))
+# print("Performing no Transaction Test:")
+# print("Performing Overall Test:")
+# print("Scores: {}".format(runTests(testDataset, "completion", "Transaction")))
+# print("Performing Adherence Test:")
+# print("Scores: {}".format(runTests(testDataset, "futurePurchases", "Transaction")))
+# print("Performing Profit Test:")
+# print("Scores: {}".format(runTests(testDataset, "profitableAssets", "Transaction")))
