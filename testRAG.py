@@ -812,7 +812,6 @@ if args.divide:
         date: data[: math.ceil(len(data) / args.divide)]
         for date, data in testDataset.items()
     }
-testDataset = {date: random.sample(data, 1) for date, data in testDataset.items()}
 print("Performing Hybrid Test:")
 print("Performing Overall Test:")
 print("Scores: {}".format(runTests(testDataset, "completion")))
