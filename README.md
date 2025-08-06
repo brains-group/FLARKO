@@ -1,4 +1,4 @@
-# FLARKO: Financial Language-model for Asset Recommendation with Knowledge-graph Optimization
+# RAG-FLARKO: Financial Language-model for Asset Recommendation with Knowledge-graph Optimization and Retrieval Augmented Generation
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-red.svg)](https://pytorch.org/)
@@ -21,6 +21,7 @@ FLARKO is a framework specifically designed for financial asset recommendation s
 - [Data Preparation](#data-preparation)
 - [Training](#training)
 - [Evaluation](#evaluation)
+- [RAG](#rag)
 - [License](#license)
 
 ## Installation
@@ -218,6 +219,14 @@ python test.py --base_model_path Qwen/Qwen3-4B --lora_path ./models/path/to/lora
 |                | MKG      |    0.2927 ± 0.0711   |    0.3415 ± 0.0741   |    0.2439 ± 0.0671   |
 |                | Nothing  |    0.2745 ± 0.0625   |    0.3333 ± 0.0660   |    0.2157 ± 0.0576   |
 
+## RAG
+
+To perform the RAG tests, run `testRAG.py` and pass the appropriate `--base_model_path` and `--lora_path` arguments. The `--divide` parameter can be used to decrease the number of testing data point via division.
+
+```bash
+# Test RAG performance
+python testRAG.py --base_model_path Qwen/Qwen3-4B --lora_path ./models/path/to/lora/checkpoint
+```
 
 ## License
 
