@@ -47,10 +47,14 @@ pip install -r requirements.txt
 
 ### 1. Data Preparation
 
+Download the [Far-Trans dataset](https://researchdata.gla.ac.uk/1658/) and place the CSV files in `./data/FAR-Trans`.
+
 ```bash
 # Create financial datasets
 cd data
 python data/createFinData.py
+# IID data
+python data/createFinDataNorm.py
 ```
 
 ### 2. Centralized Training
@@ -150,6 +154,8 @@ python train.py \
   --num_rounds 100 \
   --dataset_name finDataset
 ```
+
+Use `finDatasetNorm.json` instead of `findDataset.json` for the IID clients.
 
 ### Federated Training Configuration
 
