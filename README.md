@@ -1,4 +1,4 @@
-# RAG-FLARKO: Financial Language-model for Asset Recommendation with Knowledge-graph Optimization and Retrieval Augmented Generation
+# FLARKO: Financial Language-model for Asset Recommendation with Knowledge-graph Optimization
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-red.svg)](https://pytorch.org/)
@@ -21,7 +21,6 @@ FLARKO is a framework specifically designed for financial asset recommendation s
 - [Data Preparation](#data-preparation)
 - [Training](#training)
 - [Evaluation](#evaluation)
-- [RAG](#rag)
 - [License](#license)
 
 ## Installation
@@ -48,10 +47,14 @@ pip install -r requirements.txt
 
 ### 1. Data Preparation
 
+Download the [Far-Trans dataset](https://researchdata.gla.ac.uk/1658/) and place the CSV files in `./data/FAR-Trans`.
+
 ```bash
 # Create financial datasets
 cd data
 python data/createFinData.py
+# IID data
+python data/createFinDataNorm.py
 ```
 
 ### 2. Centralized Training
@@ -152,6 +155,8 @@ python train.py \
   --dataset_name finDataset
 ```
 
+Use `finDatasetNorm.json` instead of `findDataset.json` for the IID clients.
+
 ### Federated Training Configuration
 
 Key parameters in configuration files:
@@ -218,6 +223,8 @@ python test.py --base_model_path Qwen/Qwen3-4B --lora_path ./models/path/to/lora
 |                | PKG      |  **0.4528 ± 0.0684** |    0.5849 ± 0.0677   |  **0.3585 ± 0.0659** |
 |                | MKG      |    0.2927 ± 0.0711   |    0.3415 ± 0.0741   |    0.2439 ± 0.0671   |
 |                | Nothing  |    0.2745 ± 0.0625   |    0.3333 ± 0.0660   |    0.2157 ± 0.0576   |
+
+
 
 ## RAG
 
