@@ -331,6 +331,8 @@ class SubgraphRetriever(BaseRetriever):
     graph: Graph
     llm: BaseLanguageModel
     candidate_query: str  # SPARQL query to find candidate nodes
+    context: dict
+    indi_graphs: list
 
     class Config:
         arbitrary_types_allowed = True
@@ -400,14 +402,23 @@ class SubgraphRetriever(BaseRetriever):
         """
         # print(sparql_construct_query)
 
-        # 4. Execute the query to get the subgraph
-        subgraph = self.graph.query(sparql_construct_query).graph
-        if not subgraph:
-            return [Document(page_content="{}")]
+        def doQuery(graph, context):
+            # 4. Execute the query to get the subgraph
+            subgraph = graph.query(sparql_construct_query).graph
+            if not subgraph:
+                return [Document(page_content="{}")]
 
-        # 5. Serialize the subgraph to JSON-LD and return as a single Document
-        jsonld_output = subgraph.serialize(format="json-ld", indent=None)
-        return [Document(page_content=jsonld_output)]
+            # 5. Serialize the subgraph to JSON-LD and return as a single Document
+            jsonld_output = subgraph.serialize(
+                format="json-ld", context=self.context, indent=None
+            )
+            return [Document(page_content=jsonld_output)]
+
+        return (
+            doQuery(self.graph, self.context)
+            if self.indi_graphs is None
+            else [doQuery(graph, context) for graph, context in self.indi_graphs]
+        )
 
 
 # =============================================================================
@@ -446,6 +457,13 @@ ASSETS_CANDIDATE_QUERY = """
     PREFIX ns: <http://securityTrade.com/ns#>
     SELECT ?s WHERE {
       ?s a ns:TenWeekPriceSummary
+    }
+"""
+
+COMBINED_CANDIDATE_QUERY = """
+    PREFIX ns: <http://securityTrade.com/ns#>
+    SELECT ?s WHERE {
+      { ?s a ns:BuyTransaction } UNION { ?s a ns:SellTransaction } UNION { ?s a ns:TenWeekPriceSummary }
     }
 """
 
@@ -504,11 +522,12 @@ def format_qwen_chat_template(input_dict: dict, tokenizer) -> str:
 
 def ragCall(
     prompts,
-    parallel: bool =False,
+    parallel: bool = False,
     getTransactionData: bool = True,
     getMarketData: bool = True,
+    comb: bool = True,
 ):
-    global llm
+    global llm, backgroundContext, transactionContext
     user_prompt = prompts[-1]["content"]
     currentDate = re.search(r"current date is ([^,]+),", user_prompt).group(1)
     userSearch = re.search(r"users::([^\"]+)\"", prompts[2]["content"])
@@ -517,45 +536,91 @@ def ragCall(
     transactions_graph = getCustomerSubgraphUntilDate(user, currentDate)
     assets_graph = getBackgroundSubgraphUntilDate(currentDate)
 
-    retriever_transactions = SubgraphRetriever(
-        graph=transactions_graph,
-        llm=retrieve_llm,
-        candidate_query=TRANSACTIONS_CANDIDATE_QUERY,
-    )
-    retriever_assets = SubgraphRetriever(
-        graph=assets_graph, llm=retrieve_llm, candidate_query=ASSETS_CANDIDATE_QUERY
-    )
+    if comb:
+        retriever = SubgraphRetriever(
+            graph=transactions_graph + assets_graph,
+            llm=retrieve_llm,
+            candidate_query=COMBINED_CANDIDATE_QUERY,
+            indi_graphs=[
+                (transactions_graph, transactionContext),
+                (assets_graph, backgroundContext),
+            ],
+        )
+        retrieved_transactions, retrieved_assets = (
+            (lambda inputs: user_prompt)
+            | retriever
+            | (
+                lambda inputs: (
+                    (None, None)
+                    if inputs is None
+                    else (get_jsonld_from_docs(input) for input in inputs)
+                )
+            )
+        ).invoke({"user_question": user_prompt})
+        if retrieved_transactions == None:
+            print("--- Retrieval failed at combined step. Halting. ---")
+            return None
+    else:
+        retriever_transactions = SubgraphRetriever(
+            graph=transactions_graph,
+            llm=retrieve_llm,
+            candidate_query=TRANSACTIONS_CANDIDATE_QUERY,
+            context=transactionContext,
+        )
+        retriever_assets = SubgraphRetriever(
+            graph=assets_graph,
+            llm=retrieve_llm,
+            candidate_query=ASSETS_CANDIDATE_QUERY,
+            context=backgroundContext,
+        )
+
+        # Invoke the first step
+        retrieved_transactions = (
+            (
+                (lambda inputs: user_prompt)
+                | retriever_transactions
+                | get_jsonld_from_docs
+            ).invoke({"user_question": user_prompt})
+            if getTransactionData
+            else lambda _: "Empty"
+        )
+
+        if retrieved_transactions == None:
+            print("--- Retrieval failed at transaction step. Halting. ---")
+            return None
+
+        retrieved_assets = (
+            retrieved_transactions
+            if comb
+            else (
+                (
+                    (
+                        (
+                            (lambda inputs: user_prompt)
+                            if parallel
+                            else create_asset_query
+                        )
+                        | retriever_assets
+                        | get_jsonld_from_docs
+                    )
+                ).invoke(
+                    {
+                        "user_question": user_prompt,
+                        "transactions_jsonld": getTransactionData,
+                    }
+                )
+                if getMarketData
+                else lambda _: "Empty"
+            )
+        )
+
+        if retrieved_assets == None:
+            print("--- Retrieval failed at asset step. Halting. ---")
+            return None
 
     qwen_formatter = RunnableLambda(
         partial(format_qwen_chat_template, tokenizer=tokenizer)
     )
-    # Invoke the first step
-    retrieved_transactions = (
-        (
-            (lambda inputs: user_prompt) | retriever_transactions | get_jsonld_from_docs
-        ).invoke({"user_question": user_prompt})
-        if getTransactionData
-        else lambda _: "Empty"
-    )
-
-    if retrieved_transactions == None:
-        print("--- Retrieval failed at transaction step. Halting. ---")
-        return None
-
-    retrieved_assets = (
-        ((((lambda inputs: user_prompt) if parallel else create_asset_query) | retriever_assets | get_jsonld_from_docs)).invoke(
-            {
-                "user_question": user_prompt,
-                "transactions_jsonld": getTransactionData,
-            }
-        )
-        if getMarketData
-        else lambda _: "Empty"
-    )
-
-    if retrieved_assets == None:
-        print("--- Retrieval failed at asset step. Halting. ---")
-        return None
 
     rag_chain = (
         # {
@@ -599,7 +664,9 @@ def ragCall(
 # =============================================================================
 
 
-def runTests(dataset, goalName="completion", parallel=False, ignoreData="", name=None):
+def runTests(
+    dataset, goalName="completion", parallel=False, comb=False, ignoreData="", name=None
+):
     if name is None:
         name = (
             "RAG_"
@@ -611,6 +678,8 @@ def runTests(dataset, goalName="completion", parallel=False, ignoreData="", name
             )
             + "_parallel="
             + str(parallel)
+            + "_comb="
+            + str(comb)
             + "_ignore"
             + ignoreData
         )
@@ -648,6 +717,7 @@ def runTests(dataset, goalName="completion", parallel=False, ignoreData="", name
                     parallel,
                     not ("Transaction" in ignoreData),
                     not ("Background" in ignoreData),
+                    comb,
                 )
 
                 responses[str(date)].append(response)
@@ -700,7 +770,9 @@ def runTests(dataset, goalName="completion", parallel=False, ignoreData="", name
                 else:
                     falseNegatives[date][-1] += 1
                     print(f"{goal} not found in response.")
-            if len(tokenizer.encode(fullResponse, add_special_tokens=True)) > 4090 and (rank < 0 or rank > 2):
+            if len(tokenizer.encode(fullResponse, add_special_tokens=True)) > 4090 and (
+                rank < 0 or rank > 2
+            ):
                 truePositives[date].pop()
                 falsePositives[date].pop()
                 falseNegatives[date].pop()
@@ -830,17 +902,42 @@ print("Performing Adherence Test:")
 print("Scores: {}".format(runTests(testDataset, "futurePurchases", True)))
 print("Performing Profit Test:")
 print("Scores: {}".format(runTests(testDataset, "profitableAssets", True)))
-# print("Performing no Background Test:")
-# print("Performing Overall Test:")
-# print("Scores: {}".format(runTests(testDataset, "completion", "Background")))
-# print("Performing Adherence Test:")
-# print("Scores: {}".format(runTests(testDataset, "futurePurchases", "Background")))
-# print("Performing Profit Test:")
-# print("Scores: {}".format(runTests(testDataset, "profitableAssets", "Background")))
-# print("Performing no Transaction Test:")
-# print("Performing Overall Test:")
-# print("Scores: {}".format(runTests(testDataset, "completion", "Transaction")))
-# print("Performing Adherence Test:")
-# print("Scores: {}".format(runTests(testDataset, "futurePurchases", "Transaction")))
-# print("Performing Profit Test:")
-# print("Scores: {}".format(runTests(testDataset, "profitableAssets", "Transaction")))
+print("Performing Combined Test:")
+print("Performing Overall Test:")
+print("Scores: {}".format(runTests(testDataset, "completion", comb=True)))
+print("Performing Adherence Test:")
+print("Scores: {}".format(runTests(testDataset, "futurePurchases", comb=True)))
+print("Performing Profit Test:")
+print("Scores: {}".format(runTests(testDataset, "profitableAssets", comb=True)))
+print("Performing no Background Test:")
+print("Performing Overall Test:")
+print("Scores: {}".format(runTests(testDataset, "completion", ignoreData="Background")))
+print("Performing Adherence Test:")
+print(
+    "Scores: {}".format(
+        runTests(testDataset, "futurePurchases", ignoreData="Background")
+    )
+)
+print("Performing Profit Test:")
+print(
+    "Scores: {}".format(
+        runTests(testDataset, "profitableAssets", ignoreData="Background")
+    )
+)
+print("Performing no Transaction Test:")
+print("Performing Overall Test:")
+print(
+    "Scores: {}".format(runTests(testDataset, "completion", ignoreData="Transaction"))
+)
+print("Performing Adherence Test:")
+print(
+    "Scores: {}".format(
+        runTests(testDataset, "futurePurchases", ignoreData="Transaction")
+    )
+)
+print("Performing Profit Test:")
+print(
+    "Scores: {}".format(
+        runTests(testDataset, "profitableAssets", ignoreData="Transaction")
+    )
+)
