@@ -13,7 +13,7 @@ from datetime import datetime
 from itertools import chain
 import yaml
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Optional
 from functools import partial
 
 sys.path.append("../../")
@@ -331,8 +331,8 @@ class SubgraphRetriever(BaseRetriever):
     graph: Graph
     llm: BaseLanguageModel
     candidate_query: str  # SPARQL query to find candidate nodes
-    context: dict
-    indi_graphs: list
+    context: Optional[dict] = None
+    indi_graphs: Optional[list] = None
 
     class Config:
         arbitrary_types_allowed = True
@@ -888,20 +888,20 @@ if args.divide:
         date: data[: math.ceil(len(data) / args.divide)]
         for date, data in testDataset.items()
     }
-print("Performing Hybrid Test:")
-print("Performing Overall Test:")
-print("Scores: {}".format(runTests(testDataset, "completion")))
-print("Performing Adherence Test:")
-print("Scores: {}".format(runTests(testDataset, "futurePurchases")))
-print("Performing Profit Test:")
-print("Scores: {}".format(runTests(testDataset, "profitableAssets")))
-print("Performing Parallel Test:")
-print("Performing Overall Test:")
-print("Scores: {}".format(runTests(testDataset, "completion", True)))
-print("Performing Adherence Test:")
-print("Scores: {}".format(runTests(testDataset, "futurePurchases", True)))
-print("Performing Profit Test:")
-print("Scores: {}".format(runTests(testDataset, "profitableAssets", True)))
+# print("Performing Hybrid Test:")
+# print("Performing Overall Test:")
+# print("Scores: {}".format(runTests(testDataset, "completion")))
+# print("Performing Adherence Test:")
+# print("Scores: {}".format(runTests(testDataset, "futurePurchases")))
+# print("Performing Profit Test:")
+# print("Scores: {}".format(runTests(testDataset, "profitableAssets")))
+# print("Performing Parallel Test:")
+# print("Performing Overall Test:")
+# print("Scores: {}".format(runTests(testDataset, "completion", True)))
+# print("Performing Adherence Test:")
+# print("Scores: {}".format(runTests(testDataset, "futurePurchases", True)))
+# print("Performing Profit Test:")
+# print("Scores: {}".format(runTests(testDataset, "profitableAssets", True)))
 print("Performing Combined Test:")
 print("Performing Overall Test:")
 print("Scores: {}".format(runTests(testDataset, "completion", comb=True)))
