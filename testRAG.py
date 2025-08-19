@@ -341,12 +341,17 @@ class SubgraphRetriever(BaseRetriever):
         self, query: str, *, run_manager: CallbackManagerForRetrieverRun
     ) -> List[Document]:
 
+        def returnEmpty():
+            return (
+                [Document(page_content="{}")]
+                if self.indi_graphs is None
+                else [[Document(page_content="{}")] for _ in self.indi_graphs]
+            )
+
         # 1. Get a list of all candidate entities using the provided SPARQL query
         candidate_uris = [str(row.s) for row in self.graph.query(self.candidate_query)]
         if not candidate_uris:
-            return [
-                Document(page_content="{}")
-            ]  # Return empty JSON-LD if no candidates
+            return returnEmpty()  # Return empty JSON-LD if no candidates
         if len(candidate_uris) > MAX_ENTITIES * 4:
             candidate_uris = random.sample(candidate_uris, MAX_ENTITIES * 4)
 
@@ -385,7 +390,7 @@ class SubgraphRetriever(BaseRetriever):
             f"<{uri.strip()}>" for uri in identified_nodes_str.split(",") if uri.strip()
         ]
         if not node_list:
-            return [Document(page_content="{}")]
+            return returnEmpty()
         node_list = node_list[:MAX_ENTITIES]
 
         # This query constructs a subgraph including all triples where the identified
@@ -404,7 +409,10 @@ class SubgraphRetriever(BaseRetriever):
 
         def doQuery(graph, context):
             # 4. Execute the query to get the subgraph
-            subgraph = graph.query(sparql_construct_query).graph
+            try:
+                subgraph = graph.query(sparql_construct_query).graph
+            except Exception:
+                subgraph = None
             if not subgraph:
                 return [Document(page_content="{}")]
 
