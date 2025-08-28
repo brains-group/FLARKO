@@ -21,6 +21,7 @@ FLARKO is a framework specifically designed for financial asset recommendation s
 - [Data Preparation](#data-preparation)
 - [Training](#training)
 - [Evaluation](#evaluation)
+- [RAG](#RAG)
 - [License](#license)
 
 ## Installation
