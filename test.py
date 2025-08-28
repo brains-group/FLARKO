@@ -1,3 +1,5 @@
+from copy import deepcopy
+import statistics
 import datasets
 import argparse
 import random
@@ -26,38 +28,41 @@ parser.add_argument("--base_model_path", type=str, default="Qwen/Qwen3-0.6B")
 parser.add_argument("--lora_path", type=str, default=None)
 parser.add_argument("--data", type=str, default="fin")
 parser.add_argument("--smaller", action=argparse.BooleanOptionalAction)
+parser.add_argument("--doNotLoadModel", action=argparse.BooleanOptionalAction)
 args = parser.parse_args()
 print(args)
 
-# ============= Extract model name from the path. The name is used for saving results. =============
-if args.lora_path:
-    pre_str, checkpoint_str = os.path.split(args.lora_path)
-    _, exp_name = os.path.split(pre_str)
-    checkpoint_id = checkpoint_str.split("-")[-1]
-    model_name = f"{exp_name}_{checkpoint_id}"
-else:
-    pre_str, last_str = os.path.split(args.base_model_path)
-    if last_str.startswith("full"):  # if the model is merged as full model
+if not args.doNotLoadModel:
+    # ============= Extract model name from the path. The name is used for saving results. =============
+    if args.lora_path:
+        pre_str, checkpoint_str = os.path.split(args.lora_path)
         _, exp_name = os.path.split(pre_str)
-        checkpoint_id = last_str.split("-")[-1]
+        checkpoint_id = checkpoint_str.split("-")[-1]
         model_name = f"{exp_name}_{checkpoint_id}"
     else:
-        model_name = last_str  # mainly for base model
-        exp_name = model_name
+        pre_str, last_str = os.path.split(args.base_model_path)
+        if last_str.startswith("full"):  # if the model is merged as full model
+            _, exp_name = os.path.split(pre_str)
+            checkpoint_id = last_str.split("-")[-1]
+            model_name = f"{exp_name}_{checkpoint_id}"
+        else:
+            model_name = last_str  # mainly for base model
+            exp_name = model_name
 
-
-# ============= Generate responses =============
-device = "cuda"
-model = AutoModelForCausalLM.from_pretrained(
-    args.base_model_path,
-    torch_dtype=torch.float16,
-    rope_scaling={"type": "yarn", "factor": 4.0},
-).to(device)
-if args.lora_path is not None:
-    model = PeftModel.from_pretrained(
-        model, args.lora_path, torch_dtype=torch.float16
+    # ============= Generate responses =============
+    device = "cuda"
+    model = AutoModelForCausalLM.from_pretrained(
+        args.base_model_path,
+        torch_dtype=torch.float16,
+        rope_scaling={"type": "yarn", "factor": 4.0},
     ).to(device)
-tokenizer = AutoTokenizer.from_pretrained(args.base_model_path, use_fast=False)
+    if args.lora_path is not None:
+        model = PeftModel.from_pretrained(
+            model, args.lora_path, torch_dtype=torch.float16
+        ).to(device)
+    tokenizer = AutoTokenizer.from_pretrained(args.base_model_path, use_fast=False)
+else:
+    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B", use_fast=False)
 
 
 def runTests(dataset, goalName="completion", ignoreData="", name=None):
@@ -86,11 +91,11 @@ def runTests(dataset, goalName="completion", ignoreData="", name=None):
         if not os.path.exists(responsesFolder):
             os.makedirs(responsesFolder)
 
-    truePositives = defaultdict(lambda: 0)
-    falsePositives = defaultdict(lambda: 0)
-    falseNegatives = defaultdict(lambda: 0)
-    hits = defaultdict(lambda: [0] * 10)
-    mrr = defaultdict(lambda: 0)
+    truePositives = defaultdict(lambda: [])
+    falsePositives = defaultdict(lambda: [])
+    falseNegatives = defaultdict(lambda: [])
+    hits = defaultdict(lambda: [[] for _ in range(10)])
+    mrr = defaultdict(lambda: [])
     numDatapoints = 0
     for date, data in tqdm(dataset.items()):
         if saveResponses:
@@ -156,23 +161,33 @@ def runTests(dataset, goalName="completion", ignoreData="", name=None):
             else:
                 response = responses[str(date)][index]
             print(f"---------------- RESPONSE --------------\n{response}")
+            endThinkString = "</think>"
+            endThinkIndex = response.rfind(endThinkString)
+            if endThinkIndex == -1:
+                print("Output Did not complete thinking")
+                continue
+            fullResponse = response
+            response = response[(endThinkIndex + len(endThinkString)) :]
 
             goals = dataPoint[goalName]
             print(f"---------------- GOALS --------------\n{goals}")
 
             recommendations = re.findall("(?=\n-([^\n]+))", response)
             formatFollowed = len(recommendations) > 0
+            truePositives[date].append(0)
+            falsePositives[date].append(0)
+            falseNegatives[date].append(0)
             subResponse = response
             if formatFollowed:
                 subResponse = "".join(recommendations)
-                falsePositives[date] += len(recommendations)
+                falsePositives[date][-1] += len(recommendations)
             rank = -1
             for goal in goals:
                 if goal in subResponse:
-                    truePositives[date] += 1
+                    truePositives[date][-1] += 1
                     print(f"{goal} found in response.")
                     if formatFollowed:
-                        falsePositives[date] -= 1
+                        falsePositives[date][-1] -= 1
                         for recommendationIndex in range(
                             len(recommendations)
                             if rank < 0
@@ -182,27 +197,56 @@ def runTests(dataset, goalName="completion", ignoreData="", name=None):
                                 rank = recommendationIndex
                     else:
                         rank = 0
-                        falseNegatives[date] += len(goals) - (goals.index(goal) + 1)
+                        falseNegatives[date][-1] += len(goals) - (goals.index(goal) + 1)
                         break
                 else:
-                    falseNegatives[date] += 1
+                    falseNegatives[date][-1] += 1
                     print(f"{goal} not found in response.")
-            falseNegatives[date] = max(
-                0, min(20 - truePositives[date], falseNegatives[date])
+            # if (
+            #     formatFollowed
+            #     and (
+            #         len(recommendations) < 3
+            #         or (
+            #             len(recommendations[2]) < len(recommendations[1])
+            #             and len(recommendations[2]) < len(recommendations[0])
+            #         )
+            #     )
+            #     and (rank < 0 or rank > 2)
+            # ):
+            #     truePositives[date].pop()
+            #     falsePositives[date].pop()
+            #     falseNegatives[date].pop()
+            #     continue
+            if len(tokenizer.encode(fullResponse, add_special_tokens=True)) > 4090 and (rank < 0 or rank > 2):
+                print("Output Did not complete after thinking")
+                continue
+            falseNegatives[date][-1] = max(
+                0, min(20 - truePositives[date][-1], falseNegatives[date][-1])
             )
+            mrr[date].append(0)
+            for i in range(len(hits[date])):
+                hits[date][i].append(0)
             if rank >= 0:
-                mrr[date] += 1 / (rank + 1)
+                mrr[date][-1] += 1 / (rank + 1)
                 if len(hits[date]) < len(recommendations):
-                    hits[date] += [hits[date][-1]] * (
-                        len(recommendations) - len(hits[date])
+                    # hits[date] += [deepcopy(hits[date][-1])] * (
+                    #     len(recommendations) - len(hits[date])
+                    # )
+                    hits[date].extend(
+                        [
+                            deepcopy(hits[date][-1])
+                            for _ in range(len(recommendations) - len(hits[date]))
+                        ]
                     )
                 for i in range(rank, len(hits[date]), 1):
-                    hits[date][i] += 1
-            print(f"truePositives[date]: {truePositives[date]}")
-            print(f"falsePositives[date]: {falsePositives[date]}")
-            print(f"falseNegatives[date]: {falseNegatives[date]}")
-            print(f"Hits@: {hits[date]}")
+                    hits[date][i][-1] += 1
+            print(f"truePositives[date][-1]: {truePositives[date][-1]}")
+            print(f"falsePositives[date][-1]: {falsePositives[date][-1]}")
+            print(f"falseNegatives[date][-1]: {falseNegatives[date][-1]}")
+            print(f"Hits@: {[hities[-1] for hities in hits[date]]}")
             numDatePoints += 1
+        if numDatePoints == 0:
+            continue
         print(
             (
                 "\nFor date: {date}\n"
@@ -214,18 +258,18 @@ def runTests(dataset, goalName="completion", ignoreData="", name=None):
             ).format(
                 date=date,
                 num_tests=numDatePoints,
-                precision=truePositives[date]
-                / max(truePositives[date] + falsePositives[date], 1),
-                recall=truePositives[date]
-                / max(truePositives[date] + falseNegatives[date], 1),
-                mrr=mrr[date] / numDatePoints,
+                precision=sum(truePositives[date])
+                / max(sum(truePositives[date]) + sum(falsePositives[date]), 1),
+                recall=sum(truePositives[date])
+                / max(sum(truePositives[date]) + sum(falseNegatives[date]), 1),
+                mrr=sum(mrr[date]) / numDatePoints,
                 hits="\n".join(
                     [
                         "Hits@{}: {}".format(
                             hitIndex + 1,
-                            hitCount / numDatePoints,
+                            sum(hitCounts) / numDatePoints,
                         )
-                        for hitIndex, hitCount in enumerate(hits[date])
+                        for hitIndex, hitCounts in enumerate(hits[date])
                     ]
                 ),
             )
@@ -237,7 +281,7 @@ def runTests(dataset, goalName="completion", ignoreData="", name=None):
             json.dump(responses, file)
 
     def getSumOfDictVals(dictionary):
-        return sum(dictionary.values())
+        return sum([sum(val) for val in dictionary.values()])
 
     return (
         "\nOverall Stats\n"
@@ -255,19 +299,20 @@ def runTests(dataset, goalName="completion", ignoreData="", name=None):
         mrr=getSumOfDictVals(mrr) / numDatapoints,
         hits="\n".join(
             [
-                "Hits@{}: {}".format(
+                "Hits@{}: {} - {}".format(
                     hitIndex + 1,
-                    sum(
+                    hitVal := sum(
                         [
                             (
-                                hitList[hitIndex]
+                                sum(hitList[hitIndex])
                                 if hitIndex < len(hitList)
-                                else hitList[-1]
+                                else sum(hitList[-1])
                             )
                             for hitList in hits.values()
                         ]
                     )
                     / numDatapoints,
+                    math.sqrt(hitVal * (1 - hitVal) / numDatapoints),
                 )
                 for hitIndex in range(max(len(hitList) for hitList in hits.values()))
             ]
