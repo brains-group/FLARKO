@@ -226,6 +226,8 @@ python test.py --base_model_path Qwen/Qwen3-4B --lora_path ./models/path/to/lora
 |                | Nothing  |    0.2745 ± 0.0625   |    0.3333 ± 0.0660   |    0.2157 ± 0.0576   |
 
 
+**Performance of CenFLARKO and FedFLARKO across different model sizes against baselines**
+![Performance Comparison](./images/scatter_and_comb3_sorted_diagonal_adjust-1.pdf)
 
 ## RAG
 
