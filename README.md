@@ -228,7 +228,7 @@ python test.py --base_model_path Qwen/Qwen3-4B --lora_path ./models/path/to/lora
 
 **Performance of CenFLARKO and FedFLARKO across different model sizes against baselines**
 
-![Performance Comparison](./images/scatter_and_comb3_sorted_diagonal_adjust-1.pdf)
+![Performance Comparison](https://github.com/brains-group/FLARKO/blob/RAG/images/scatter_and_comb3_sorted_diagonal_adjust-1.pdf)
 
 ## RAG
 
