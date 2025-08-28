@@ -590,7 +590,7 @@ def ragCall(
                 | get_jsonld_from_docs
             ).invoke({"user_question": user_prompt})
             if getTransactionData
-            else lambda _: "Empty"
+            else "Empty"
         )
 
         if retrieved_transactions == None:
@@ -618,7 +618,7 @@ def ragCall(
                     }
                 )
                 if getMarketData
-                else lambda _: "Empty"
+                else "Empty"
             )
         )
 
